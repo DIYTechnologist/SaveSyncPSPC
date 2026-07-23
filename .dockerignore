@@ -1,0 +1,14 @@
+.git
+.agents
+.codex
+.github
+__pycache__/
+*.py[cod]
+.ruff_cache/
+.venv/
+.uv-cache/
+converted_for_*/
+garlic_ps5_to_pc/
+garlic_pc_to_ps5/
+garlic_clair_ps5_to_steam/
+garlic_clair_steam_to_ps5/
