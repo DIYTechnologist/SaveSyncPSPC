@@ -132,100 +132,32 @@ save-sync-ps-pc-checksums.txt
 
 - Creates a GitHub Release with generated notes, marked as a pre-release unless `release_type` is set to `release`.
 
-## Adding a New Game
+## Engine Abstraction
 
-Each supported game needs metadata plus a registered Go implementation.
+Conversion logic is a property of the save-game *engine* (e.g. Unreal's GVAS format), not of any one title. A "game" is just a `games/<key>.json` profile naming an engine and supplying that engine's config; there is no per-game Go plugin to write. This replaced the old `gameapi.Game`-per-game model (see `internal/games/clair/` in history prior to the engine abstraction) so that adding a second title on an already-supported engine takes a JSON diff, not a Go file.
 
-1. Add metadata under `games/`.
-
-Example:
-
-```json
-{
-  "game": "mygame",
-  "name": "My Game",
-  "ids": [
-    {
-      "id": "PPSA00000",
-      "region": "EU"
-    }
-  ]
-}
+```
+games/<key>.json ──► profile loader (internal/games) ──► engine registry (internal/engine)
+                                                              │
+                                                    ┌─────────┴─────────┐
+                                                    ▼                   ▼
+                                          internal/engine/unreal   internal/engine/larian
+                                             (GVAS, implemented)    (LSPK, not yet implemented)
 ```
 
-`games/*.json` is embedded into the binaries via `//go:embed` in the root `embed.go` (`Builtin`), so a rebuild is required to pick up a new game added here. On-disk files under `--games-dir` (default `games`, resolved against cwd) override/extend the embedded ones by `game` key, and are edited in place without a rebuild. The first time that directory doesn't exist, `save-sync`/`save-sync-ui` create it and seed it with a copy of the embedded metadata (best effort; never overwrites an existing directory or file), so a plain run in any cwd ends up with an editable `games/` folder there.
+- `internal/engine`: the `Engine` interface (`Name`, `ParseConfig`, `Images`, `Compatibility`, `ConvertFromPS5`, `ConvertToPS5`, `InstallOutputs`) and a name → `Engine` registry (`Register`/`Get`). `Config` is `any`: each engine parses its own `engine_config` block and type-asserts it back internally, so different engines can have completely different config shapes.
+- `internal/engine/unreal`: the only implemented engine. Generalizes what used to be `internal/games/clair`: `Config` carries the Unreal module name, the list of Garlic save images (each with its own `payload` filename — there's no single game-wide `PayloadName()` anymore), and a `class_equivalence` table of known-good `(pc class, ps5 class)` pairs per logical image. A class mismatch with no matching row currently only warns; it doesn't block conversion yet.
+- `internal/engine/larian`: a stub. `"engine": "larian"` resolves to a real `Engine` and fails clearly ("not implemented yet") rather than "unknown engine" — the LSPK reader/writer for Baldur's Gate 3 hasn't been built.
+- `internal/gvas`: unchanged low-level GVAS binary parsing/envelope-graft library (`Parse`, `ConvertWithEnvelope`), used by `internal/engine/unreal` rather than by a game package directly.
+- `internal/games/registry.go` wires it together: `Profiles()` loads `games/*.json` (embedded defaults merged with `--games-dir` overrides, see below), and `ResolveEngine(profile)` looks up `profile.Engine` in the registry and calls its `ParseConfig(profile.EngineConfig)`. `SelectProfile(...)` returns a `Selected{Profile, Engine, Config}` bundle that `bridge.go` calls directly — there's no per-game Go code in that path at all.
 
-2. Add a package under `internal/games/<game>/`.
+### Adding a new Unreal game
 
-The package must implement `gameapi.Game`:
+1. Add `games/<key>.json` with `"engine": "unreal"` and an `engine_config` block, following `games/clair.json` as the template: `module`, an `images` list (each entry needs `logical`, `save_name`, `pc_file`, and `payload`), and a `class_equivalence` list for any logical image whose PC and PS5 save classes differ (an image with no row isn't class-checked at all, and identical classes on both sides never need a row).
+2. `games/*.json` is embedded into the binaries via `//go:embed` in the root `embed.go` (`Builtin`), so a rebuild is required to pick up a new file added here. On-disk files under `--games-dir` (default `games`, resolved against cwd) override/extend the embedded ones by `game` key, and are edited in place without a rebuild; the first time that directory doesn't exist, `save-sync`/`save-sync-ui` seed it from the embedded defaults (best effort, never overwrites an existing directory or file).
+3. Add tests under `internal/engine/unreal` exercising the new profile's `engine_config` the same way `unreal_test.go`'s `clairLikeConfig()` does — no new Go package needed unless the game needs logic the generic engine doesn't have yet.
+4. Update `docs/<game>.md` and `README.md` current support as before.
 
-```go
-type Game struct{}
+### Adding a new engine
 
-func (Game) Key() string
-func (Game) Name() string
-func (Game) TitleIDs() []string
-func (Game) PayloadName() string
-func (Game) SaveImages() []gameapi.SaveImage
-func (Game) Compatibility() gameapi.Compatibility
-func (Game) ConvertFromPS5(map[string][]byte, string) (gameapi.ConversionResult, error)
-func (Game) ConvertToPS5(string, map[string][]byte) (gameapi.ConversionResult, error)
-func (Game) InstallOutputs(map[string][]byte, string, string) error
-```
-
-3. Register the game in `internal/games/registry.go`.
-
-```go
-var registry = map[string]gameapi.Game{
-    "clair":  clair.Game{},
-    "mygame": mygame.Game{},
-}
-```
-
-4. Define required save images.
-
-Each `SaveImage` maps a Garlic save image to a PC save file:
-
-```go
-gameapi.SaveImage{
-    Logical:  "gameplay",
-    SaveName: "sdimg_EXAMPLE",
-    Label:    "Example",
-    PCFile:   "Example.sav",
-}
-```
-
-The UI only shows complete groups where every required image is present for the same user/title ID.
-
-5. Implement conversion.
-
-If the game uses Unreal GVAS saves and can use envelope grafting, reuse `internal/gvas`. If the game needs a different format, keep that parser/converter inside the game package or a shared internal package if another game will reuse it.
-
-6. Add tests.
-
-Minimum expected tests:
-
-- Metadata maps title IDs correctly.
-- Supported grouping requires every needed save image.
-- Missing PC save files fail before conversion.
-- PS5 to PC conversion writes every expected output.
-- PC to PS5 conversion writes every expected replacement payload.
-- Backup layout remains unchanged:
-
-```text
-backup/<game>-<yyyymmddhhmmss>/
-  PC/
-  PS5/
-```
-
-7. Update docs.
-
-Add `docs/<game>.md` with:
-
-- Supported title IDs and regions.
-- Required Garlic save images.
-- Required PC save files.
-- Compatibility/version notes.
-- Known limitations and restore guidance.
-
-Update `README.md` current support if the game is user-ready.
+A genuinely new save format (e.g. Larian's LSPK, once implemented) needs a new `internal/engine/<name>` package implementing `engine.Engine`, registered in `internal/games/registry.go`'s `init()`. See `internal/engine/larian` for the minimal shape of a not-yet-implemented engine.

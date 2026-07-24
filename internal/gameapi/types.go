@@ -1,5 +1,7 @@
 package gameapi
 
+import "encoding/json"
+
 type CompatibilitySide struct {
 	Platform            string `json:"platform"`
 	GameplayClassSuffix string `json:"gameplay_class_suffix"`
@@ -18,6 +20,11 @@ type SaveImage struct {
 	SaveName string `json:"save_name"`
 	Label    string `json:"label"`
 	PCFile   string `json:"pc_file"`
+	// Payload is the filename inside the Garlic save image (e.g.
+	// "ue4savegame.dpx.sav"). It's a property of the image, not the game,
+	// since different logical images of the same game - or a different
+	// engine entirely - may use different payload filenames.
+	Payload string `json:"payload"`
 }
 
 type ConversionResult struct {
@@ -27,20 +34,10 @@ type ConversionResult struct {
 }
 
 type Profile struct {
-	Key          string   `json:"key"`
-	Name         string   `json:"name"`
-	TitleIDs     []string `json:"ids"`
-	MetadataPath string   `json:"metadata_path"`
-}
-
-type Game interface {
-	Key() string
-	Name() string
-	TitleIDs() []string
-	PayloadName() string
-	SaveImages() []SaveImage
-	Compatibility() Compatibility
-	ConvertFromPS5(ps5Payloads map[string][]byte, pcDir string) (ConversionResult, error)
-	ConvertToPS5(pcDir string, ps5Templates map[string][]byte) (ConversionResult, error)
-	InstallOutputs(outputs map[string][]byte, pcDir string, backupDir string) error
+	Key          string          `json:"key"`
+	Name         string          `json:"name"`
+	TitleIDs     []string        `json:"ids"`
+	MetadataPath string          `json:"metadata_path"`
+	Engine       string          `json:"engine"`
+	EngineConfig json.RawMessage `json:"engine_config"`
 }

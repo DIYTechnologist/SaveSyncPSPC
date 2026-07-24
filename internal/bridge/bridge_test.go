@@ -15,12 +15,12 @@ func TestBackupCurrentSavesCreatesPCAndPS5Layout(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), []byte("pc-main-original"))
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), []byte("pc-container-original"))
 	when := time.Date(2026, 7, 24, 11, 22, 33, 0, time.UTC)
-	backupDir, err := BackupCurrentSaves(filepath.Join(t.TempDir(), "backup"), "clair", pcDir, "ue4savegame.dpx.sav", map[string][]byte{
+	backupDir, err := BackupCurrentSaves(filepath.Join(t.TempDir(), "backup"), "clair", pcDir, map[string][]byte{
 		"gameplay":  []byte("ps5-main-original"),
 		"container": []byte("ps5-container-original"),
 	}, []gameapi.SaveImage{
-		{Logical: "gameplay", SaveName: "sdimg_EXPEDITION0", PCFile: "EXPEDITION_0.sav"},
-		{Logical: "container", SaveName: "sdimg_SavesContainer", PCFile: "SavesContainer.sav"},
+		{Logical: "gameplay", SaveName: "sdimg_EXPEDITION0", PCFile: "EXPEDITION_0.sav", Payload: "ue4savegame.dpx.sav"},
+		{Logical: "container", SaveName: "sdimg_SavesContainer", PCFile: "SavesContainer.sav", Payload: "ue4savegame.dpx.sav"},
 	}, when)
 	if err != nil {
 		t.Fatal(err)

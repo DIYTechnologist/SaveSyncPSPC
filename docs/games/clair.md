@@ -10,7 +10,7 @@ This page covers the Clair-specific behavior in the Save Sync PS-PC bridge.
 - Region: EU
 - PC platform: Steam
 
-The title ID is mapped in `games/clair.json`. The bridge uses the `clair` game key to select the registered Go implementation in `internal/games/clair`.
+The title ID and conversion behavior are both declared in `games/clair.json` (`"engine": "unreal"` plus its `engine_config`); there's no per-game Go package. See "Engine Abstraction" in `docs/dev.md` for how the generic `internal/engine/unreal` engine reads that profile.
 
 ## Save Images
 

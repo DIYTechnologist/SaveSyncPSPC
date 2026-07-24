@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"unicode/utf16"
 )
@@ -202,17 +203,44 @@ func Parse(data []byte, label string) (Info, error) {
 	}, nil
 }
 
-func ConvertWithEnvelope(sourceData, targetTemplate []byte, sourceLabel, targetLabel string) ([]byte, Info, Info, Info, error) {
+// EnvelopeOptions controls how strictly ConvertWithEnvelope treats a
+// package-version mismatch between source and target.
+type EnvelopeOptions struct {
+	// AllowPackageVersionMismatch downgrades a package-version mismatch
+	// from a hard error to a warning. Off by default: a mismatch is the
+	// one signal that the envelope graft (header bytes from the target,
+	// properties from the source) might not deserialize correctly, so it
+	// should only be set once a specific mismatch has been verified by
+	// hand for a given game/build.
+	AllowPackageVersionMismatch bool
+}
+
+// EnvelopeResult is the outcome of a successful envelope graft.
+type EnvelopeResult struct {
+	Data     []byte
+	Source   Info
+	Target   Info
+	Result   Info
+	Warnings []string
+}
+
+func ConvertWithEnvelope(sourceData, targetTemplate []byte, sourceLabel, targetLabel string, opts EnvelopeOptions) (EnvelopeResult, error) {
 	source, err := Parse(sourceData, sourceLabel)
 	if err != nil {
-		return nil, Info{}, Info{}, Info{}, err
+		return EnvelopeResult{}, err
 	}
 	target, err := Parse(targetTemplate, targetLabel)
 	if err != nil {
-		return nil, Info{}, Info{}, Info{}, err
+		return EnvelopeResult{}, err
 	}
+
+	var warnings []string
 	if source.PackageVersionUE4 != target.PackageVersionUE4 {
-		return nil, Info{}, Info{}, Info{}, fmt.Errorf("%s and %s use different UE4 package versions: %d != %d", sourceLabel, targetLabel, source.PackageVersionUE4, target.PackageVersionUE4)
+		msg := fmt.Sprintf("%s and %s use different UE4 package versions: %d != %d", sourceLabel, targetLabel, source.PackageVersionUE4, target.PackageVersionUE4)
+		if !opts.AllowPackageVersionMismatch {
+			return EnvelopeResult{}, errors.New(msg)
+		}
+		warnings = append(warnings, msg)
 	}
 	sourceUE5 := uint32(0)
 	targetUE5 := uint32(0)
@@ -223,7 +251,11 @@ func ConvertWithEnvelope(sourceData, targetTemplate []byte, sourceLabel, targetL
 		targetUE5 = *target.PackageVersionUE5
 	}
 	if (source.PackageVersionUE5 == nil) != (target.PackageVersionUE5 == nil) || sourceUE5 != targetUE5 {
-		return nil, Info{}, Info{}, Info{}, fmt.Errorf("%s and %s use different UE5 package versions: %v != %v", sourceLabel, targetLabel, source.PackageVersionUE5, target.PackageVersionUE5)
+		msg := fmt.Sprintf("%s and %s use different UE5 package versions: %v != %v", sourceLabel, targetLabel, source.PackageVersionUE5, target.PackageVersionUE5)
+		if !opts.AllowPackageVersionMismatch {
+			return EnvelopeResult{}, errors.New(msg)
+		}
+		warnings = append(warnings, msg)
 	}
 
 	converted := make([]byte, 0, target.PropertiesOffset+len(sourceData)-source.PropertiesOffset)
@@ -231,13 +263,13 @@ func ConvertWithEnvelope(sourceData, targetTemplate []byte, sourceLabel, targetL
 	converted = append(converted, sourceData[source.PropertiesOffset:]...)
 	result, err := Parse(converted, "converted "+sourceLabel)
 	if err != nil {
-		return nil, Info{}, Info{}, Info{}, err
+		return EnvelopeResult{}, err
 	}
 	if result.SaveClass != target.SaveClass {
-		return nil, Info{}, Info{}, Info{}, fmt.Errorf("target save class was not retained for %s", sourceLabel)
+		return EnvelopeResult{}, fmt.Errorf("target save class was not retained for %s", sourceLabel)
 	}
 	// Note: we don't attempt to verify the grafted header is one the game
 	// will actually accept beyond this - that can only be confirmed by
 	// loading the save.
-	return converted, source, target, result, nil
+	return EnvelopeResult{Data: converted, Source: source, Target: target, Result: result, Warnings: warnings}, nil
 }

@@ -97,7 +97,7 @@ func PrepareOutputDir(outputDir string, force bool, protected []string) error {
 	return os.MkdirAll(outputDir, 0o755)
 }
 
-func BackupCurrentSaves(backupRoot, game, pcDir, payloadName string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time) (string, error) {
+func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time) (string, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -133,7 +133,7 @@ func BackupCurrentSaves(backupRoot, game, pcDir, payloadName string, ps5Payloads
 		if !ok {
 			return "", fmt.Errorf("missing PS5 payload for %s", image.Logical)
 		}
-		if err := AtomicWrite(filepath.Join(backupDir, "PS5", image.SaveName, payloadName), data); err != nil {
+		if err := AtomicWrite(filepath.Join(backupDir, "PS5", image.SaveName, image.Payload), data); err != nil {
 			return "", err
 		}
 	}
@@ -143,29 +143,30 @@ func BackupCurrentSaves(backupRoot, game, pcDir, payloadName string, ps5Payloads
 func PS5ToPC(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
-	profile, game, err := selectGame(options, client)
+	selected, err := selectGame(options, client)
 	if err != nil {
 		return err
 	}
+	profile := selected.Profile
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	payloadName := game.PayloadName()
+	images := selected.Engine.Images(selected.Config)
 	ps5Payloads := map[string][]byte{}
-	for _, image := range game.SaveImages() {
-		log(fmt.Sprintf("Pulling %s %s/%s from Garlic...", profile.Name, image.SaveName, payloadName))
-		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, payloadName, options.PS5UID)
+	for _, image := range images {
+		log(fmt.Sprintf("Pulling %s %s/%s from Garlic...", profile.Name, image.SaveName, image.Payload))
+		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, image.Payload, options.PS5UID)
 		if err != nil {
 			return err
 		}
 		ps5Payloads[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, payloadName, ps5Payloads, game.SaveImages(), time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Payloads, images, time.Time{})
 	if err != nil {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := game.ConvertFromPS5(ps5Payloads, options.PCDir)
+	result, err := selected.Engine.ConvertFromPS5(selected.Config, ps5Payloads, options.PCDir)
 	if err != nil {
 		return err
 	}
@@ -192,7 +193,7 @@ func PS5ToPC(options Options) error {
 	}
 	log("Created converted PC files in: " + options.OutputDir)
 	if options.Install {
-		if err := game.InstallOutputs(result.Outputs, options.PCDir, filepath.Join(backupDir, "PC")); err != nil {
+		if err := selected.Engine.InstallOutputs(selected.Config, result.Outputs, options.PCDir, filepath.Join(backupDir, "PC")); err != nil {
 			return err
 		}
 		log("Installed into PC directory: " + options.PCDir)
@@ -204,35 +205,38 @@ func PS5ToPC(options Options) error {
 func PCToPS5(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
-	profile, game, err := selectGame(options, client)
+	selected, err := selectGame(options, client)
 	if err != nil {
 		return err
 	}
+	profile := selected.Profile
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	payloadName := game.PayloadName()
+	images := selected.Engine.Images(selected.Config)
+	payloadBySaveName := map[string]string{}
 	ps5Templates := map[string][]byte{}
-	for _, image := range game.SaveImages() {
-		log(fmt.Sprintf("Pulling PS5 template %s %s/%s from Garlic...", profile.Name, image.SaveName, payloadName))
-		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, payloadName, options.PS5UID)
+	for _, image := range images {
+		payloadBySaveName[image.SaveName] = image.Payload
+		log(fmt.Sprintf("Pulling PS5 template %s %s/%s from Garlic...", profile.Name, image.SaveName, image.Payload))
+		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, image.Payload, options.PS5UID)
 		if err != nil {
 			return err
 		}
 		ps5Templates[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, payloadName, ps5Templates, game.SaveImages(), time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Templates, images, time.Time{})
 	if err != nil {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := game.ConvertToPS5(options.PCDir, ps5Templates)
+	result, err := selected.Engine.ConvertToPS5(selected.Config, options.PCDir, ps5Templates)
 	if err != nil {
 		return err
 	}
 	printWarnings(log, result.Warnings)
 	for saveName, data := range result.Outputs {
-		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadName), data); err != nil {
+		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadBySaveName[saveName]), data); err != nil {
 			return err
 		}
 	}
@@ -258,6 +262,7 @@ func PCToPS5(options Options) error {
 			return fmt.Errorf("refusing to write to PS5 without --yes")
 		}
 		for saveName, data := range result.Outputs {
+			payloadName := payloadBySaveName[saveName]
 			log(fmt.Sprintf("Replacing %s %s/%s through Garlic...", profile.Name, saveName, payloadName))
 			if err := client.ReplacePayload(profile.TitleIDs, saveName, payloadName, data, options.PS5UID); err != nil {
 				return err
@@ -270,12 +275,12 @@ func PCToPS5(options Options) error {
 	return nil
 }
 
-func selectGame(options Options, client *garlic.Client) (gameapi.Profile, gameapi.Game, error) {
+func selectGame(options Options, client *garlic.Client) (games.Selected, error) {
 	var seen []string
 	if options.Game == "" && options.TitleID == "" {
 		saves, err := client.Saves()
 		if err != nil {
-			return gameapi.Profile{}, nil, err
+			return games.Selected{}, err
 		}
 		for _, save := range saves {
 			seen = append(seen, fmt.Sprint(save["title_id"]))
@@ -309,11 +314,11 @@ func SupportedGroups(gamesDir string, saves []garlic.Save) ([]map[string]any, er
 	}
 	var groups []map[string]any
 	for _, profile := range profiles {
-		game, ok := games.Registered(profile.Key)
-		if !ok {
+		eng, cfg, err := games.ResolveEngine(profile)
+		if err != nil {
 			continue
 		}
-		required := game.SaveImages()
+		required := eng.Images(cfg)
 		requiredNames := map[string]gameapi.SaveImage{}
 		for _, image := range required {
 			requiredNames[image.SaveName] = image

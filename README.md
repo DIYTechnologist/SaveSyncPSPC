@@ -215,14 +215,9 @@ save-sync-ps-pc-checksums.txt
 
 ## Game Discovery
 
-Supported games are described by metadata under `games/` and Go implementations under `internal/games/`. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
+Supported games are described entirely by metadata under `games/` — a game is a JSON profile naming a save-format *engine* (`internal/engine/unreal` for Unreal's GVAS format; `internal/engine/larian` for Baldur's Gate 3's LSPK format is registered but not yet implemented) plus that engine's config, not a per-game Go plugin. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
 
-Each game has:
-
-- A JSON metadata file, for example `clair.json`
-- A registered Go implementation, for example `internal/games/clair`
-
-The metadata maps one or more PS5 title IDs to a stable game key:
+The metadata maps one or more PS5 title IDs to a stable game key, and declares its engine:
 
 ```json
 {
@@ -233,11 +228,21 @@ The metadata maps one or more PS5 title IDs to a stable game key:
       "id": "PPSA17599",
       "region": "EU"
     }
-  ]
+  ],
+  "engine": "unreal",
+  "engine_config": {
+    "module": "Sandfall",
+    "images": [
+      { "logical": "gameplay", "save_name": "sdimg_EXPEDITION0", "pc_file": "EXPEDITION_0.sav", "payload": "ue4savegame.dpx.sav" }
+    ],
+    "class_equivalence": [
+      { "logical": "gameplay", "pc": "/Script/Sandfall.BP_SaveGameObject_V8_C", "ps5": "/Script/Sandfall.BP_SaveGameObject_V7_C", "verified": true }
+    ]
+  }
 }
 ```
 
-The game key is used to look up a registered Go implementation. A new supported game should add its own metadata, implement the `gameapi.Game` interface, register it in `internal/games/registry.go`, and add tests for discovery and required save grouping.
+A new game on an already-supported engine (another Unreal title, for instance) is just a new `games/<key>.json` — no Go code required. See "Engine Abstraction" in `docs/dev.md` for the full schema and how to add a genuinely new engine.
 
 ## Development
 

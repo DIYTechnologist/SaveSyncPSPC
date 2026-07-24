@@ -6,6 +6,35 @@
       "id": "PPSA17599",
       "region": "EU"
     }
-  ]
+  ],
+  "engine": "unreal",
+  "engine_config": {
+    "module": "Sandfall",
+    "images": [
+      {
+        "logical": "gameplay",
+        "save_name": "sdimg_EXPEDITION0",
+        "label": "EXPEDITION_0",
+        "pc_file": "EXPEDITION_0.sav",
+        "payload": "ue4savegame.dpx.sav"
+      },
+      {
+        "logical": "container",
+        "save_name": "sdimg_SavesContainer",
+        "label": "SavesContainer",
+        "pc_file": "SavesContainer.sav",
+        "payload": "ue4savegame.dpx.sav"
+      }
+    ],
+    "class_equivalence": [
+      {
+        "logical": "gameplay",
+        "pc": "/Script/Sandfall.BP_SaveGameObject_V8_C",
+        "ps5": "/Script/Sandfall.BP_SaveGameObject_V7_C",
+        "verified": true,
+        "note": "Known compatible envelope graft: Steam gameplay V8 <-> PS5 gameplay V7."
+      }
+    ],
+    "allow_package_version_mismatch": false
+  }
 }
-

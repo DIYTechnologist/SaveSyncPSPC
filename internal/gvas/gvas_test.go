@@ -52,25 +52,40 @@ func TestParseFindsPropertiesOffsetAndClass(t *testing.T) {
 func TestConvertWithEnvelopeRetainsTargetHeader(t *testing.T) {
 	source := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V7_C", []byte("ps5-properties"), 522)
 	template := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("pc-template"), 522)
-	converted, src, target, result, err := gvas.ConvertWithEnvelope(source, template, "ps5", "pc template")
+	envelope, err := gvas.ConvertWithEnvelope(source, template, "ps5", "pc template", gvas.EnvelopeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if src.SaveClass != "/Script/Sandfall.BP_SaveGameObject_V7_C" {
-		t.Fatalf("source class = %s", src.SaveClass)
+	if envelope.Source.SaveClass != "/Script/Sandfall.BP_SaveGameObject_V7_C" {
+		t.Fatalf("source class = %s", envelope.Source.SaveClass)
 	}
-	if result.SaveClass != target.SaveClass {
-		t.Fatalf("result class = %s, target = %s", result.SaveClass, target.SaveClass)
+	if envelope.Result.SaveClass != envelope.Target.SaveClass {
+		t.Fatalf("result class = %s, target = %s", envelope.Result.SaveClass, envelope.Target.SaveClass)
 	}
-	if got := converted[result.PropertiesOffset:]; string(got) != "ps5-properties" {
+	if got := envelope.Data[envelope.Result.PropertiesOffset:]; string(got) != "ps5-properties" {
 		t.Fatalf("payload mismatch: %q", got)
+	}
+	if len(envelope.Warnings) != 0 {
+		t.Fatalf("warnings = %#v", envelope.Warnings)
 	}
 }
 
 func TestConvertWithEnvelopeRejectsPackageMismatch(t *testing.T) {
 	source := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("source"), 522)
 	template := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V7_C", []byte("template"), 523)
-	if _, _, _, _, err := gvas.ConvertWithEnvelope(source, template, "source", "template"); err == nil {
+	if _, err := gvas.ConvertWithEnvelope(source, template, "source", "template", gvas.EnvelopeOptions{}); err == nil {
 		t.Fatal("expected mismatch error")
+	}
+}
+
+func TestConvertWithEnvelopeAllowsPackageMismatchOverride(t *testing.T) {
+	source := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("source"), 522)
+	template := syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("template"), 523)
+	envelope, err := gvas.ConvertWithEnvelope(source, template, "source", "template", gvas.EnvelopeOptions{AllowPackageVersionMismatch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope.Warnings) != 1 {
+		t.Fatalf("warnings = %#v", envelope.Warnings)
 	}
 }
