@@ -1,5 +1,7 @@
 FROM golang:1.22-bookworm AS build
 
+ARG VERSION=dev
+
 WORKDIR /src
 
 COPY go.mod ./
@@ -8,18 +10,18 @@ COPY internal ./internal
 COPY games ./games
 
 RUN go test ./... \
-    && go build -o /out/save-sync ./cmd/save-sync \
-    && go build -o /out/save-sync-ui ./cmd/save-sync-ui
+    && go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/save-sync ./cmd/save-sync \
+    && go build -ldflags "-s -w -X main.version=${VERSION}" -o /out/save-sync-ui ./cmd/save-sync-ui
 
 FROM build AS release
 
 RUN mkdir -p /dist/linux-amd64 /dist/linux-arm64 /dist/windows-amd64 \
-    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-amd64/save-sync ./cmd/save-sync \
-    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-amd64/save-sync-ui ./cmd/save-sync-ui \
-    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-arm64/save-sync ./cmd/save-sync \
-    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-arm64/save-sync-ui ./cmd/save-sync-ui \
-    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/windows-amd64/save-sync.exe ./cmd/save-sync \
-    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/windows-amd64/save-sync-ui.exe ./cmd/save-sync-ui
+    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-amd64/save-sync ./cmd/save-sync \
+    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-amd64/save-sync-ui ./cmd/save-sync-ui \
+    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-arm64/save-sync ./cmd/save-sync \
+    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-arm64/save-sync-ui ./cmd/save-sync-ui \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/windows-amd64/save-sync.exe ./cmd/save-sync \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/windows-amd64/save-sync-ui.exe ./cmd/save-sync-ui
 
 FROM debian:bookworm-slim
 

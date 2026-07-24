@@ -44,6 +44,13 @@ Show CLI help:
 ./bin/save-sync --help
 ```
 
+Show binary version:
+
+```sh
+./bin/save-sync --version
+./bin/save-sync-ui --version
+```
+
 Start the browser UI:
 
 ```sh
@@ -145,6 +152,12 @@ Build the image:
 
 ```sh
 make docker-build
+```
+
+Embed a specific version in Docker-built binaries:
+
+```sh
+make docker-build VERSION=2026.0724.120000
 ```
 
 Show CLI help inside the image:

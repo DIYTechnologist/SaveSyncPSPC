@@ -34,6 +34,14 @@ bin/save-sync
 bin/save-sync-ui
 ```
 
+Embed and check a version string:
+
+```sh
+make build VERSION=2026.0724.120000
+./bin/save-sync --version
+./bin/save-sync-ui --version
+```
+
 Run the UI locally:
 
 ```sh
@@ -81,6 +89,13 @@ Build the runtime Docker image:
 
 ```sh
 make docker-build
+```
+
+Docker builds also accept `VERSION`:
+
+```sh
+make docker-build VERSION=2026.0724.120000
+docker run --rm save-sync-ps-pc:latest save-sync --version
 ```
 
 ## CI/CD

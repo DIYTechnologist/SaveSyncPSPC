@@ -64,7 +64,7 @@ ui:
 	$(GO) run ./cmd/save-sync-ui --host $(UI_HOST) --port $(UI_PORT)
 
 docker-build:
-	$(DOCKER) build -t $(IMAGE) .
+	$(DOCKER) build --build-arg VERSION=$(VERSION) -t $(IMAGE) .
 
 docker-bin: docker-build
 	mkdir -p $(DIST_DIR)/docker
@@ -75,7 +75,7 @@ docker-bin: docker-build
 	$(DOCKER) rm save-sync-bin-tmp
 
 docker-release:
-	$(DOCKER) build --target release -t $(IMAGE)-release .
+	$(DOCKER) build --build-arg VERSION=$(VERSION) --target release -t $(IMAGE)-release .
 	-$(DOCKER) rm -f save-sync-release-tmp
 	$(DOCKER) create --name save-sync-release-tmp $(IMAGE)-release
 	rm -rf $(DIST_DIR)
