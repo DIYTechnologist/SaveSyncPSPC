@@ -43,12 +43,11 @@ jobs:
 
       - name: Package release assets
         run: |
-          tag="${{ steps.ref.outputs.tag }}"
           mkdir -p release
-          tar -C dist/linux-amd64 -czf "release/save-sync-ps-pc_${tag}_linux-amd64.tar.gz" .
-          tar -C dist/linux-arm64 -czf "release/save-sync-ps-pc_${tag}_linux-arm64.tar.gz" .
-          tar -C dist/windows-amd64 -czf "release/save-sync-ps-pc_${tag}_windows-amd64.tar.gz" .
-          (cd release && sha256sum * > "save-sync-ps-pc_${tag}_checksums.txt")
+          tar -C dist/linux-amd64 -czf "release/save-sync-ps-pc-linux-amd64.tar.gz" .
+          tar -C dist/linux-arm64 -czf "release/save-sync-ps-pc-linux-arm64.tar.gz" .
+          (cd dist/windows-amd64 && zip -r "../../release/save-sync-ps-pc-windows-amd64.zip" .)
+          (cd release && sha256sum * > "save-sync-ps-pc-checksums.txt")
 
       - name: Upload release artifact
         uses: actions/upload-artifact@v4
