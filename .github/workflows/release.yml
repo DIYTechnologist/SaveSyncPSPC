@@ -1,9 +1,6 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "????.????.??????"
   workflow_dispatch:
     inputs:
       tag:
@@ -23,11 +20,7 @@ jobs:
       - name: Resolve tag
         id: ref
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            tag="${{ inputs.tag }}"
-          else
-            tag="${GITHUB_REF_NAME}"
-          fi
+          tag="${{ inputs.tag }}"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Checkout tag
