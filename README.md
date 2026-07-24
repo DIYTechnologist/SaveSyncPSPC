@@ -6,12 +6,9 @@ The service discovers supported saves from Garlic, groups the save images that b
 
 ## Current Support
 
-- Clair Obscur: Expedition 33
-- PS5 title ID: `PPSA17599` (EU)
-- PC target: Steam
-- Known compatible conversion: Steam gameplay V8 <-> PS5 gameplay V7
-
-See [docs/clair.md](docs/clair.md) for Clair-specific save names, compatibility notes, and workflow details.
+See [docs/supported_games.md](docs/supported_games.md) for supported games and platform compatibility.
+See [docs/games/clair.md](docs/games/clair.md) for Clair-specific save names, compatibility notes, and workflow details.
+See [docs/dev.mnd](docs/dev.mnd) for development, release, and new-game implementation notes.
 
 ## Requirements
 
@@ -181,6 +178,28 @@ docker run --rm --network host \
 
 On platforms where Docker does not support `--network host`, publish the UI port with `-p 8765:8765` and make sure the container can reach the Garlic IP.
 
+## Release Artifacts
+
+`make release` and `make docker-release` create:
+
+```text
+dist/linux-amd64/save-sync
+dist/linux-amd64/save-sync-ui
+dist/linux-arm64/save-sync
+dist/linux-arm64/save-sync-ui
+dist/windows-amd64/save-sync.exe
+dist/windows-amd64/save-sync-ui.exe
+```
+
+GitHub Releases package those binaries as:
+
+```text
+save-sync-ps-pc-linux-amd64.tar.gz
+save-sync-ps-pc-linux-arm64.tar.gz
+save-sync-ps-pc-windows-amd64.zip
+save-sync-ps-pc-checksums.txt
+```
+
 ## Game Discovery
 
 Supported games are described by metadata under `games/` and Go implementations under `internal/games/`.
@@ -229,6 +248,8 @@ Clean generated caches and build artifacts:
 ```sh
 make clean
 ```
+
+CI runs on pushes to `master` and pull requests. Successful `master` builds upload a 1-day artifact and create a timestamp tag in `yyyy.mmdd.hhmmss` format. Releases are manual: run the Release workflow with one of those tags to create GitHub Release assets and generated release notes.
 
 ## Safety Notes
 

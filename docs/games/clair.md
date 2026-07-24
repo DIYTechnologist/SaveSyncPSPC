@@ -50,6 +50,10 @@ Current known compatible pair:
 
 The bridge records compatibility metadata in `garlic_sync_manifest.json`. It warns if the source or target gameplay class does not match the known pair. Treat that warning seriously: newer game builds may still parse, but the data may not be semantically compatible.
 
+## Binaries
+
+Use the Go binaries from `bin/`, `dist/`, Docker, or GitHub Releases. Windows release assets are packaged as `.zip`; Linux release assets are packaged as `.tar.gz`.
+
 ## PS5 to PC Workflow
 
 1. Start Garlic Save Manager on the PS5.
