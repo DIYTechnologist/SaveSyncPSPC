@@ -117,7 +117,7 @@ yyyy.mmdd.hhmmss
 Release workflow: `.github/workflows/release.yml`
 
 - Manual only.
-- Input is an existing tag, usually created by CI.
+- Inputs: an existing tag (usually created by CI), and `release_type` (`prerelease` or `release`, defaults to `prerelease`).
 - Checks out that tag.
 - Runs tests.
 - Builds release binaries.
@@ -130,7 +130,7 @@ save-sync-ps-pc-windows-amd64.zip
 save-sync-ps-pc-checksums.txt
 ```
 
-- Creates a GitHub Release with generated notes.
+- Creates a GitHub Release with generated notes, marked as a pre-release unless `release_type` is set to `release`.
 
 ## Adding a New Game
 

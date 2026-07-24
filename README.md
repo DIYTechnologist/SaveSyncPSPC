@@ -262,7 +262,7 @@ Clean generated caches and build artifacts:
 make clean
 ```
 
-CI runs on pushes to `master` and pull requests. Successful `master` builds upload a 1-day artifact and create a timestamp tag in `yyyy.mmdd.hhmmss` format. Releases are manual: run the Release workflow with one of those tags to create GitHub Release assets and generated release notes.
+CI runs on pushes to `master` and pull requests. Successful `master` builds upload a 1-day artifact and create a timestamp tag in `yyyy.mmdd.hhmmss` format. Releases are manual: run the Release workflow with one of those tags to create GitHub Release assets and generated release notes. The workflow also takes a `release_type` input (`prerelease` or `release`) to control whether the created GitHub Release is marked as a pre-release; it defaults to `prerelease`.
 
 ## Safety Notes
 

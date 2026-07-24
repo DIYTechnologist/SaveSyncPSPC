@@ -7,6 +7,14 @@ on:
         description: "Existing tag to release, e.g. 2026.0724.153000"
         required: true
         type: string
+      release_type:
+        description: "Whether to publish this as a pre-release or a full release"
+        required: true
+        type: choice
+        options:
+          - prerelease
+          - release
+        default: prerelease
 
 permissions:
   contents: write
@@ -61,6 +69,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="${{ steps.ref.outputs.tag }}"
-          gh release create "$tag" release/* \
-            --title "$tag" \
-            --generate-notes
+          args=(--title "$tag" --generate-notes)
+          if [ "${{ inputs.release_type }}" = "prerelease" ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$tag" release/* "${args[@]}"
