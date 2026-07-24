@@ -1,22 +1,37 @@
-FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+FROM golang:1.22-bookworm AS build
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    UV_CACHE_DIR=/tmp/uv-cache
+WORKDIR /src
+
+COPY go.mod ./
+COPY cmd ./cmd
+COPY internal ./internal
+COPY games ./games
+
+RUN go test ./... \
+    && go build -o /out/save-sync ./cmd/save-sync \
+    && go build -o /out/save-sync-ui ./cmd/save-sync-ui
+
+FROM build AS release
+
+RUN mkdir -p /dist/linux-amd64 /dist/linux-arm64 /dist/windows-amd64 \
+    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-amd64/save-sync ./cmd/save-sync \
+    && GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-amd64/save-sync-ui ./cmd/save-sync-ui \
+    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-arm64/save-sync ./cmd/save-sync \
+    && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/linux-arm64/save-sync-ui ./cmd/save-sync-ui \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/windows-amd64/save-sync.exe ./cmd/save-sync \
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w" -o /dist/windows-amd64/save-sync-ui.exe ./cmd/save-sync-ui
+
+FROM debian:bookworm-slim
 
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY --from=build /out/save-sync /usr/local/bin/save-sync
+COPY --from=build /out/save-sync-ui /usr/local/bin/save-sync-ui
 COPY README.md ./
 COPY docs ./docs
-COPY src ./src
-COPY tests ./tests
-
-RUN uv run python -m compileall -q src/garlicsync tests \
-    && uv run ruff check src/garlicsync tests \
-    && uv run pytest -q
+COPY games ./games
 
 EXPOSE 8765
 
-ENTRYPOINT ["uv", "run"]
+ENTRYPOINT []
 CMD ["save-sync", "--help"]

@@ -15,8 +15,7 @@ See [docs/clair.md](docs/clair.md) for Clair-specific save names, compatibility 
 
 ## Requirements
 
-- Python 3.12 or newer
-- `uv`
+- Go 1.22 or newer
 - Garlic Save Manager running on the PS5 and reachable over HTTP
 - Valid owned PS5 saves already visible in Garlic
 - A local PC save directory for the target game
@@ -24,16 +23,34 @@ See [docs/clair.md](docs/clair.md) for Clair-specific save names, compatibility 
 
 ## Quick Start
 
-Install or run through `uv` from the repo root:
+Build the binaries from the repo root:
 
 ```sh
-uv run save-sync --help
+make build
+```
+
+Build release binaries for Linux and Windows:
+
+```sh
+make release
+```
+
+Build those same release binaries using Docker instead of a local Go toolchain:
+
+```sh
+make docker-release
+```
+
+Show CLI help:
+
+```sh
+./bin/save-sync --help
 ```
 
 Start the browser UI:
 
 ```sh
-uv run save-sync-ui --host 127.0.0.1 --port 8765
+./bin/save-sync-ui --host 127.0.0.1 --port 8765
 ```
 
 Or use the Makefile:
@@ -56,16 +73,24 @@ http://192.168.2.67:8082
 
 The UI can load saves and users from Garlic, group supported saves, filter out unsupported save images, and warn when the detected save version does not match the known compatibility profile.
 
-Compatibility aliases are still available as `garlic-sync` and `garlic-sync-ui`.
-
 ## CLI Usage
 
 The CLI can auto-discover a supported game from Garlic saves, or you can select one explicitly with `--game clair` or `--title-id PPSA17599`.
 
+Every real conversion run creates a backup before converting or applying changes:
+
+```text
+backup/<game>-<yyyymmddhhmmss>/
+  PC/
+  PS5/
+```
+
+The `PC/` directory contains copies of the current local PC save files. The `PS5/` directory contains the payloads downloaded from Garlic, grouped by Garlic save image. These files are not converted or uploaded; they are left as restore points. Use `--backup-root` to choose a different backup root.
+
 Pull PS5 payloads from Garlic and create PC save files:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -78,7 +103,7 @@ uv run save-sync \
 Install the converted PC files into the PC save directory after creating a backup:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -92,7 +117,7 @@ uv run save-sync \
 Convert local PC saves into PS5 replacement payloads without writing to the PS5:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -105,7 +130,7 @@ uv run save-sync \
 Apply converted payloads back to PS5 through Garlic:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -137,6 +162,12 @@ Run the UI in Docker:
 make docker-ui
 ```
 
+Export Linux binaries from the Docker-built image:
+
+```sh
+make docker-bin
+```
+
 Run the CLI with a mounted PC save directory:
 
 ```sh
@@ -152,13 +183,12 @@ On platforms where Docker does not support `--network host`, publish the UI port
 
 ## Game Discovery
 
-Supported games are described under `src/garlicsync/games`.
+Supported games are described by metadata under `games/` and Go implementations under `internal/games/`.
 
 Each game has:
 
 - A JSON metadata file, for example `clair.json`
-- A PC target plugin, for example `clair-pc.py`
-- A PS5 target plugin, for example `clair-ps5.py`
+- A registered Go implementation, for example `internal/games/clair`
 
 The metadata maps one or more PS5 title IDs to a stable game key:
 
@@ -175,7 +205,7 @@ The metadata maps one or more PS5 title IDs to a stable game key:
 }
 ```
 
-The game key is used to find the target plugins. A new supported game should add its own metadata and platform plugins, then tests should cover discovery and required save grouping.
+The game key is used to look up a registered Go implementation. A new supported game should add its own metadata, implement the `gameapi.Game` interface, register it in `internal/games/registry.go`, and add tests for discovery and required save grouping.
 
 ## Development
 
@@ -188,9 +218,10 @@ make all
 Run individual checks:
 
 ```sh
-make py-check
-make ruff
+make fmt
 make test
+make build
+make release
 ```
 
 Clean generated caches and build artifacts:
@@ -202,6 +233,7 @@ make clean
 ## Safety Notes
 
 - Back up PC and PS5 saves before applying replacements.
+- Save Sync PS-PC also creates `backup/<game>-<yyyymmddhhmmss>/PC` and `backup/<game>-<yyyymmddhhmmss>/PS5` before conversion.
 - Disable Steam Cloud temporarily while testing converted PC files, otherwise cloud sync may overwrite local files.
 - Do not point `--output-dir` at the PC save directory. The tool refuses some dangerous paths, but separate output directories are easier to inspect and recover from.
 - `--apply --yes` writes replacement payloads back to PS5 through Garlic. Use the dry-run output first and verify the generated manifest.

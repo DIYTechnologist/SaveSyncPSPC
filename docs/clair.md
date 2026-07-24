@@ -10,7 +10,7 @@ This page covers the Clair-specific behavior in the Save Sync PS-PC bridge.
 - Region: EU
 - PC platform: Steam
 
-The title ID is mapped in `src/garlicsync/games/clair.json`. The bridge uses the `clair` game key to load `clair-pc.py` and `clair-ps5.py`.
+The title ID is mapped in `games/clair.json`. The bridge uses the `clair` game key to select the registered Go implementation in `internal/games/clair`.
 
 ## Save Images
 
@@ -53,17 +53,18 @@ The bridge records compatibility metadata in `garlic_sync_manifest.json`. It war
 ## PS5 to PC Workflow
 
 1. Start Garlic Save Manager on the PS5.
-2. Start the UI with `make ui` or `uv run save-sync-ui --host 127.0.0.1 --port 8765`.
+2. Start the UI with `make ui` or `./bin/save-sync-ui --host 127.0.0.1 --port 8765`.
 3. Set the Garlic URL, for example `http://192.168.2.67:8082`.
 4. Load saves and select the grouped Clair save for the correct user.
 5. Run `ps5-to-pc`.
-6. Inspect the generated output directory and manifest.
-7. Use install only when ready to replace the local PC files.
+6. Inspect `backup/clair-<yyyymmddhhmmss>/PC` and `backup/clair-<yyyymmddhhmmss>/PS5`.
+7. Inspect the generated output directory and manifest.
+8. Use install only when ready to replace the local PC files.
 
 Equivalent CLI shape:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -80,14 +81,15 @@ Add `--install` to back up and replace the PC files in `--pc-dir`.
 1. Confirm the PC directory contains `EXPEDITION_0.sav` and `SavesContainer.sav`.
 2. Confirm Garlic shows the matching PS5 save images for the target PS5 user.
 3. Run `pc-to-ps5` without apply first.
-4. Inspect `garlic_sync_manifest.json` and any compatibility warnings.
-5. Re-run with `--apply --yes` only when ready to replace PS5 payloads.
-6. Start Clair on PS5 and verify that the load menu shows the expected save.
+4. Inspect `backup/clair-<yyyymmddhhmmss>/PC` and `backup/clair-<yyyymmddhhmmss>/PS5`.
+5. Inspect `garlic_sync_manifest.json` and any compatibility warnings.
+6. Re-run with `--apply --yes` only when ready to replace PS5 payloads.
+7. Start Clair on PS5 and verify that the load menu shows the expected save.
 
 Equivalent CLI dry run:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -100,7 +102,7 @@ uv run save-sync \
 Apply through Garlic:
 
 ```sh
-uv run save-sync \
+./bin/save-sync \
   --garlic http://192.168.2.67:8082 \
   --game clair \
   --ps5-uid 1ea2f4d9 \
@@ -115,6 +117,7 @@ uv run save-sync \
 ## Important Notes
 
 - Keep backups of both PC and PS5 saves.
+- Each conversion run creates a backup directory with unmodified `PC/` and `PS5/` copies before conversion or upload.
 - Disable Steam Cloud while testing converted PC files.
 - The converter uses a known-compatible envelope graft. It is not a full property-aware save editor.
 - The bridge relies on Garlic to handle PS5 mount, decrypt, upload, and re-encrypt behavior.

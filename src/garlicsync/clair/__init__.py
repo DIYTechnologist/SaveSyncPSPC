@@ -1,2 +1,0 @@
-"""Clair Obscur conversion helpers."""
-
