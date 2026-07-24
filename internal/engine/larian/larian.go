@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/gameapi"
 )
 
@@ -24,6 +25,8 @@ func New() Engine { return Engine{} }
 
 func (Engine) Name() string { return "larian" }
 
+func (Engine) OverrideTokens() []string { return nil }
+
 func (Engine) ParseConfig(raw json.RawMessage) (any, error) {
 	var cfg Config
 	if err := json.Unmarshal(raw, &cfg); err != nil {
@@ -38,11 +41,22 @@ func (Engine) Compatibility(any) gameapi.Compatibility { return gameapi.Compatib
 
 var errNotImplemented = fmt.Errorf("larian (Baldur's Gate 3) conversion is not implemented yet")
 
-func (Engine) ConvertFromPS5(any, map[string][]byte, string) (gameapi.ConversionResult, error) {
+func (Engine) Inspect(any, string, []byte, engine.Side, map[string]bool) engine.Verdict {
+	return engine.Verdict{
+		Checks: []engine.CheckResult{{
+			Check:  "not-implemented",
+			Tier:   engine.TierWrongFormat,
+			Passed: false,
+			Reason: errNotImplemented.Error(),
+		}},
+	}
+}
+
+func (Engine) ConvertFromPS5(any, map[string][]byte, string, map[string]bool) (gameapi.ConversionResult, error) {
 	return gameapi.ConversionResult{}, errNotImplemented
 }
 
-func (Engine) ConvertToPS5(any, string, map[string][]byte) (gameapi.ConversionResult, error) {
+func (Engine) ConvertToPS5(any, string, map[string][]byte, map[string]bool) (gameapi.ConversionResult, error) {
 	return gameapi.ConversionResult{}, errNotImplemented
 }
 

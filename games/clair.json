@@ -9,7 +9,7 @@
   ],
   "engine": "unreal",
   "engine_config": {
-    "module": "Sandfall",
+    "module": "",
     "images": [
       {
         "logical": "gameplay",
@@ -29,10 +29,17 @@
     "class_equivalence": [
       {
         "logical": "gameplay",
-        "pc": "/Script/Sandfall.BP_SaveGameObject_V8_C",
-        "ps5": "/Script/Sandfall.BP_SaveGameObject_V7_C",
+        "pc": "BP_SaveGameObject_V8_C",
+        "ps5": "BP_SaveGameObject_V7_C",
         "verified": true,
-        "note": "Known compatible envelope graft: Steam gameplay V8 <-> PS5 gameplay V7."
+        "note": "Confirmed live against a real PC save (/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V8.BP_SaveGameObject_V8_C) and PS5 save (/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V7.BP_SaveGameObject_V7_C). Matched by class-name suffix, not full path - the content-folder prefix isn't a reliable signal for Blueprint SaveGame classes."
+      },
+      {
+        "logical": "container",
+        "pc": "BP_jRPG_SavesContainer_C",
+        "ps5": "BP_jRPG_SavesContainer_C",
+        "verified": true,
+        "note": "Confirmed live: identical full class on both platforms (/Game/jRPGTemplate/Blueprints/SaveObjects/BP_jRPG_SavesContainer.BP_jRPG_SavesContainer_C). Listed explicitly rather than relying on the gate's implicit identity-match, in case a future patch makes the two diverge."
       }
     ],
     "allow_package_version_mismatch": false

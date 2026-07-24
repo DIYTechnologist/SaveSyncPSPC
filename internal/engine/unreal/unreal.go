@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 
+	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/gvas"
 	"savesyncpspc/internal/util"
@@ -28,7 +29,13 @@ type ImageConfig struct {
 }
 
 // ClassEquivalence declares one known-compatible (PC class, PS5 class)
-// pair for a logical image. See Config.ClassEquivalence.
+// pair for a logical image. PC/PS5 are matched against the actual save
+// class by suffix (see checkClassMap in gate.go), not full-path equality:
+// real Blueprint SaveGame classes are full content paths
+// (e.g. "/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V7.BP_SaveGameObject_V7_C"),
+// and only the trailing class name ("BP_SaveGameObject_V7_C") has been a
+// stable, validated signal in practice - the content path prefix is not
+// guaranteed. See Config.ClassEquivalence.
 type ClassEquivalence struct {
 	Logical  string `json:"logical"`
 	PC       string `json:"pc"`
@@ -40,9 +47,14 @@ type ClassEquivalence struct {
 // Config is the engine_config block for a games/<key>.json profile using
 // the "unreal" engine.
 type Config struct {
-	// Module is the Unreal module the save classes belong to, e.g.
-	// "Sandfall" for "/Script/Sandfall.BP_SaveGameObject_V8_C". Reserved
-	// for the portability gate's module-match check; not yet enforced.
+	// Module is the Unreal module a save class's *native* (/Script/...)
+	// path should belong to, e.g. "Sandfall" for
+	// "/Script/Sandfall.BP_SaveGameObject_V8_C". Leave empty (disabling
+	// the module-match check) for games whose SaveGame classes are
+	// Blueprints under /Game/... instead: those paths carry no reliable,
+	// consistent module-like signal across a game's different save
+	// images (confirmed against Clair's real saves, which use two
+	// entirely different /Game/ content folders for its two images).
 	Module string `json:"module"`
 
 	Images []ImageConfig `json:"images"`
@@ -64,6 +76,8 @@ type Engine struct{}
 func New() Engine { return Engine{} }
 
 func (Engine) Name() string { return "unreal" }
+
+func (Engine) OverrideTokens() []string { return append([]string(nil), AllowTokens...) }
 
 func (Engine) ParseConfig(raw json.RawMessage) (any, error) {
 	var cfg Config
@@ -107,8 +121,8 @@ func (Engine) Compatibility(cfgAny any) gameapi.Compatibility {
 			continue
 		}
 		return gameapi.Compatibility{
-			PC:          gameapi.CompatibilitySide{Platform: "Steam", GameplayClassSuffix: classSuffix(row.PC), Version: classVersion(row.PC)},
-			PS5:         gameapi.CompatibilitySide{Platform: "PS5", GameplayClassSuffix: classSuffix(row.PS5), Version: classVersion(row.PS5)},
+			PC:          gameapi.CompatibilitySide{Platform: "Steam", GameplayClassSuffix: ClassSuffix(row.PC), Version: classVersion(row.PC)},
+			PS5:         gameapi.CompatibilitySide{Platform: "PS5", GameplayClassSuffix: ClassSuffix(row.PS5), Version: classVersion(row.PS5)},
 			Convertible: row.Verified,
 			Note:        row.Note,
 		}
@@ -116,7 +130,12 @@ func (Engine) Compatibility(cfgAny any) gameapi.Compatibility {
 	return gameapi.Compatibility{}
 }
 
-func classSuffix(class string) string {
+// ClassSuffix extracts the trailing class name from a full Unreal save
+// class path (e.g. "/Game/.../BP_SaveGameObject_V7.BP_SaveGameObject_V7_C"
+// -> "BP_SaveGameObject_V7_C"), or returns class unchanged if it has no
+// "." (already just a suffix). This is what class_equivalence rows are
+// matched against - see checkClassMap in gate.go.
+func ClassSuffix(class string) string {
 	if idx := strings.LastIndex(class, "."); idx >= 0 {
 		return class[idx+1:]
 	}
@@ -130,38 +149,98 @@ func classVersion(class string) string {
 	return ""
 }
 
-// classWarnings checks the actual source/target save classes for a logical
-// image against its class_equivalence row (if any). A miss only warns in
-// this phase; the portability gate that turns a miss into a hard refusal
-// is a later addition (see docs/dev.md).
-func classWarnings(cfg Config, logical string, source, target gvas.Info, direction string) []string {
-	var expectedPC, expectedPS5 string
-	found := false
-	for _, row := range cfg.ClassEquivalence {
-		if row.Logical == logical {
-			expectedPC, expectedPS5 = row.PC, row.PS5
-			found = true
-			break
+// GateChecks runs every portability check - the per-payload ones (magic,
+// module, account-id, account-props, tail) on both sides plus the
+// pairwise ones (class-map, package-version) - for one logical image. A
+// tier-3 failure on either side aborts immediately as an error, since
+// there's no parsed Info to run the pairwise checks against; tier-2
+// failures come back as CheckResults for the caller to aggregate across
+// every image before deciding whether to proceed.
+func (e Engine) GateChecks(cfg Config, logical string, sourceRaw, targetRaw []byte, sourceSide, targetSide engine.Side, direction string, overrides map[string]bool) ([]engine.CheckResult, error) {
+	sourceVerdict := e.Inspect(cfg, logical, sourceRaw, sourceSide, overrides)
+	if sourceVerdict.Tier == engine.TierWrongFormat {
+		return nil, fmt.Errorf("%s: %s", logical, sourceVerdict.Checks[0].Reason)
+	}
+	targetVerdict := e.Inspect(cfg, logical, targetRaw, targetSide, overrides)
+	if targetVerdict.Tier == engine.TierWrongFormat {
+		return nil, fmt.Errorf("%s: %s", logical, targetVerdict.Checks[0].Reason)
+	}
+	sourceInfo, err := gvas.Parse(sourceRaw, logical)
+	if err != nil {
+		return nil, err
+	}
+	targetInfo, err := gvas.Parse(targetRaw, logical)
+	if err != nil {
+		return nil, err
+	}
+	checks := append(append([]engine.CheckResult{}, sourceVerdict.Checks...), targetVerdict.Checks...)
+	checks = append(checks, checkClassMap(cfg, logical, sourceInfo, targetInfo, direction, overrides), checkPackageVersion(cfg, sourceInfo, targetInfo, overrides))
+	for i := range checks {
+		checks[i].Logical = logical
+	}
+	return checks, nil
+}
+
+func blockingChecks(checks []engine.CheckResult) []engine.CheckResult {
+	var out []engine.CheckResult
+	for _, c := range checks {
+		if !c.Passed && !c.Overridden {
+			out = append(out, c)
 		}
 	}
-	if !found {
-		return nil
+	return out
+}
+
+func blockingError(blocked []engine.CheckResult) error {
+	lines := make([]string, len(blocked))
+	for i, c := range blocked {
+		lines[i] = fmt.Sprintf("%s: %s [%s]", c.Logical, c.Reason, c.Check)
 	}
-	var warnings []string
-	var sourceExpected, targetExpected string
-	switch direction {
-	case "ps5-to-pc":
-		sourceExpected, targetExpected = expectedPS5, expectedPC
-	case "pc-to-ps5":
-		sourceExpected, targetExpected = expectedPC, expectedPS5
+	return fmt.Errorf("portability gate blocked this conversion; re-run with --allow <check> to bypass a specific one:\n  %s", strings.Join(lines, "\n  "))
+}
+
+// gateWarnings surfaces the checks that passed only because they were
+// overridden, or that passed as an unverified class-equivalence
+// candidate - both cases the run proceeded, but a human should see why.
+func gateWarnings(checks []engine.CheckResult) []string {
+	var out []string
+	for _, c := range checks {
+		switch {
+		case c.Overridden:
+			out = append(out, fmt.Sprintf("OVERRIDDEN %s/%s - %s", c.Logical, c.Check, c.Reason))
+		case c.Warn:
+			out = append(out, fmt.Sprintf("CANDIDATE %s/%s - %s", c.Logical, c.Check, c.Reason))
+		}
 	}
-	if source.SaveClass != sourceExpected {
-		warnings = append(warnings, fmt.Sprintf("Expected %s class %s, got %s", logical, sourceExpected, source.SaveClass))
+	return out
+}
+
+func overriddenCheckNames(checks []engine.CheckResult) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, c := range checks {
+		if c.Overridden && !seen[c.Check] {
+			seen[c.Check] = true
+			out = append(out, c.Check)
+		}
 	}
-	if target.SaveClass != targetExpected {
-		warnings = append(warnings, fmt.Sprintf("Expected %s class %s, got %s", logical, targetExpected, target.SaveClass))
+	return out
+}
+
+func gateManifest(checks []engine.CheckResult) []map[string]any {
+	out := make([]map[string]any, len(checks))
+	for i, c := range checks {
+		out[i] = map[string]any{
+			"logical":    c.Logical,
+			"check":      c.Check,
+			"tier":       int(c.Tier),
+			"passed":     c.Passed,
+			"overridden": c.Overridden,
+			"warn":       c.Warn,
+			"reason":     c.Reason,
+		}
 	}
-	return warnings
+	return out
 }
 
 func validatePCDir(pcDir string, images []ImageConfig) error {
@@ -178,32 +257,53 @@ func validatePCDir(pcDir string, images []ImageConfig) error {
 	return nil
 }
 
-func (e Engine) ConvertFromPS5(cfgAny any, ps5Payloads map[string][]byte, pcDir string) (gameapi.ConversionResult, error) {
+func (e Engine) ConvertFromPS5(cfgAny any, ps5Payloads map[string][]byte, pcDir string, overrides map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if err := validatePCDir(pcDir, cfg.Images); err != nil {
 		return gameapi.ConversionResult{}, err
 	}
-	outputs := map[string][]byte{}
-	manifest := map[string]any{
-		"pc_dir":        pcDir,
-		"compatibility": e.Compatibility(cfg),
-	}
-	var warnings []string
+	pcData := map[string][]byte{}
 	for _, img := range cfg.Images {
-		pcData, err := os.ReadFile(filepath.Join(pcDir, img.PCFile))
+		data, err := os.ReadFile(filepath.Join(pcDir, img.PCFile))
 		if err != nil {
 			return gameapi.ConversionResult{}, err
 		}
+		pcData[img.Logical] = data
+	}
+
+	var allChecks []engine.CheckResult
+	for _, img := range cfg.Images {
 		ps5Data, ok := ps5Payloads[img.Logical]
 		if !ok {
 			return gameapi.ConversionResult{}, fmt.Errorf("missing PS5 payload for %s", img.Logical)
 		}
-		envelope, err := gvas.ConvertWithEnvelope(ps5Data, pcData, "Garlic PS5 "+img.Label, "PC "+img.Label+" template", gvas.EnvelopeOptions{AllowPackageVersionMismatch: cfg.AllowPackageVersionMismatch})
+		checks, err := e.GateChecks(cfg, img.Logical, ps5Data, pcData[img.Logical], engine.SidePS5, engine.SidePC, "ps5-to-pc", overrides)
+		if err != nil {
+			return gameapi.ConversionResult{}, err
+		}
+		allChecks = append(allChecks, checks...)
+	}
+	// The whole run aborts before any write if any required image fails a
+	// non-overridden check: a partial graft across a multi-image game is
+	// worse than none.
+	if blocked := blockingChecks(allChecks); len(blocked) > 0 {
+		return gameapi.ConversionResult{}, blockingError(blocked)
+	}
+
+	allowVersionMismatch := cfg.AllowPackageVersionMismatch || overrides[CheckPackageVersion]
+	outputs := map[string][]byte{}
+	manifest := map[string]any{
+		"pc_dir":        pcDir,
+		"compatibility": e.Compatibility(cfg),
+		"gate":          gateManifest(allChecks),
+	}
+	warnings := gateWarnings(allChecks)
+	for _, img := range cfg.Images {
+		envelope, err := gvas.ConvertWithEnvelope(ps5Payloads[img.Logical], pcData[img.Logical], "Garlic PS5 "+img.Label, "PC "+img.Label+" template", gvas.EnvelopeOptions{AllowPackageVersionMismatch: allowVersionMismatch})
 		if err != nil {
 			return gameapi.ConversionResult{}, err
 		}
 		warnings = append(warnings, envelope.Warnings...)
-		warnings = append(warnings, classWarnings(cfg, img.Logical, envelope.Source, envelope.Target, "ps5-to-pc")...)
 		outputs[img.PCFile] = envelope.Data
 		manifest[img.Logical] = map[string]any{
 			"source":   envelope.Source,
@@ -212,31 +312,49 @@ func (e Engine) ConvertFromPS5(cfgAny any, ps5Payloads map[string][]byte, pcDir 
 		}
 	}
 	manifest["warnings"] = warnings
-	return gameapi.ConversionResult{Outputs: outputs, Manifest: manifest, Warnings: warnings}, nil
+	return gameapi.ConversionResult{Outputs: outputs, Manifest: manifest, Warnings: warnings, OverriddenChecks: overriddenCheckNames(allChecks)}, nil
 }
 
-func (e Engine) ConvertToPS5(cfgAny any, pcDir string, ps5Templates map[string][]byte) (gameapi.ConversionResult, error) {
+func (e Engine) ConvertToPS5(cfgAny any, pcDir string, ps5Templates map[string][]byte, overrides map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if err := validatePCDir(pcDir, cfg.Images); err != nil {
 		return gameapi.ConversionResult{}, err
 	}
+	pcData := map[string][]byte{}
+	for _, img := range cfg.Images {
+		data, err := os.ReadFile(filepath.Join(pcDir, img.PCFile))
+		if err != nil {
+			return gameapi.ConversionResult{}, err
+		}
+		pcData[img.Logical] = data
+	}
+
+	var allChecks []engine.CheckResult
+	for _, img := range cfg.Images {
+		checks, err := e.GateChecks(cfg, img.Logical, pcData[img.Logical], ps5Templates[img.Logical], engine.SidePC, engine.SidePS5, "pc-to-ps5", overrides)
+		if err != nil {
+			return gameapi.ConversionResult{}, err
+		}
+		allChecks = append(allChecks, checks...)
+	}
+	if blocked := blockingChecks(allChecks); len(blocked) > 0 {
+		return gameapi.ConversionResult{}, blockingError(blocked)
+	}
+
+	allowVersionMismatch := cfg.AllowPackageVersionMismatch || overrides[CheckPackageVersion]
 	outputs := map[string][]byte{}
 	manifest := map[string]any{
 		"pc_dir":        pcDir,
 		"compatibility": e.Compatibility(cfg),
+		"gate":          gateManifest(allChecks),
 	}
-	var warnings []string
+	warnings := gateWarnings(allChecks)
 	for _, img := range cfg.Images {
-		pcData, err := os.ReadFile(filepath.Join(pcDir, img.PCFile))
-		if err != nil {
-			return gameapi.ConversionResult{}, err
-		}
-		envelope, err := gvas.ConvertWithEnvelope(pcData, ps5Templates[img.Logical], "PC "+img.Label, "Garlic PS5 "+img.Label+" template", gvas.EnvelopeOptions{AllowPackageVersionMismatch: cfg.AllowPackageVersionMismatch})
+		envelope, err := gvas.ConvertWithEnvelope(pcData[img.Logical], ps5Templates[img.Logical], "PC "+img.Label, "Garlic PS5 "+img.Label+" template", gvas.EnvelopeOptions{AllowPackageVersionMismatch: allowVersionMismatch})
 		if err != nil {
 			return gameapi.ConversionResult{}, err
 		}
 		warnings = append(warnings, envelope.Warnings...)
-		warnings = append(warnings, classWarnings(cfg, img.Logical, envelope.Source, envelope.Target, "pc-to-ps5")...)
 		outputs[img.SaveName] = envelope.Data
 		manifest[img.Logical] = map[string]any{
 			"source":          envelope.Source,
@@ -247,7 +365,7 @@ func (e Engine) ConvertToPS5(cfgAny any, pcDir string, ps5Templates map[string][
 		}
 	}
 	manifest["warnings"] = warnings
-	return gameapi.ConversionResult{Outputs: outputs, Manifest: manifest, Warnings: warnings}, nil
+	return gameapi.ConversionResult{Outputs: outputs, Manifest: manifest, Warnings: warnings, OverriddenChecks: overriddenCheckNames(allChecks)}, nil
 }
 
 func (Engine) InstallOutputs(cfgAny any, outputs map[string][]byte, pcDir string, backupDir string) error {

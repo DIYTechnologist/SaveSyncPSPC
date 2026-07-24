@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -30,7 +31,68 @@ type Options struct {
 	Install    bool
 	Apply      bool
 	Yes        bool
-	Log        func(string)
+	// Allow names portability-gate checks to bypass for this run (see
+	// engine.CheckResult / the unreal engine's gate.go). Unknown tokens
+	// are a hard error. For pc-to-ps5, any non-empty Allow requires Apply
+	// && Yes - console writes must name each bypassed check individually.
+	Allow []string
+	// AllowAll bypasses every tier-2 check for this run. Rejected
+	// outright for pc-to-ps5.
+	AllowAll bool
+	Log      func(string)
+}
+
+// BuildOverrides validates options.Allow against the engine's known check
+// tokens and expands AllowAll, or returns an error naming any unknown
+// token alongside the valid list.
+func BuildOverrides(overrideTokens []string, allow []string, allowAll bool) (map[string]bool, error) {
+	valid := map[string]bool{}
+	for _, token := range overrideTokens {
+		valid[token] = true
+	}
+	overrides := map[string]bool{}
+	if allowAll {
+		for token := range valid {
+			overrides[token] = true
+		}
+	}
+	var unknown []string
+	for _, token := range allow {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if !valid[token] {
+			unknown = append(unknown, token)
+			continue
+		}
+		overrides[token] = true
+	}
+	if len(unknown) > 0 {
+		validList := make([]string, 0, len(valid))
+		for token := range valid {
+			validList = append(validList, token)
+		}
+		sort.Strings(validList)
+		return nil, fmt.Errorf("unknown --allow check(s): %s; valid checks are: %s", strings.Join(unknown, ", "), strings.Join(validList, ", "))
+	}
+	return overrides, nil
+}
+
+// warnUnusedOverrides loudly flags an --allow token that didn't bypass
+// anything - a silent no-op override is the failure mode that wastes an
+// afternoon, so this is a warning even though it's not an error.
+func warnUnusedOverrides(log func(string), allow []string, fired []string) {
+	firedSet := map[string]bool{}
+	for _, check := range fired {
+		firedSet[check] = true
+	}
+	for _, token := range allow {
+		token = strings.TrimSpace(token)
+		if token != "" && !firedSet[token] {
+			log(fmt.Sprintf("Warning: --allow %s did not bypass anything - that check did not fail on this run.", token))
+		}
+	}
 }
 
 func (o Options) logger() func(string) {
@@ -147,6 +209,10 @@ func PS5ToPC(options Options) error {
 	if err != nil {
 		return err
 	}
+	overrides, err := BuildOverrides(selected.Engine.OverrideTokens(), options.Allow, options.AllowAll)
+	if err != nil {
+		return err
+	}
 	profile := selected.Profile
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
@@ -166,10 +232,11 @@ func PS5ToPC(options Options) error {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := selected.Engine.ConvertFromPS5(selected.Config, ps5Payloads, options.PCDir)
+	result, err := selected.Engine.ConvertFromPS5(selected.Config, ps5Payloads, options.PCDir, overrides)
 	if err != nil {
 		return err
 	}
+	warnUnusedOverrides(log, options.Allow, result.OverriddenChecks)
 	printWarnings(log, result.Warnings)
 	for rel, data := range result.Outputs {
 		if err := AtomicWrite(filepath.Join(options.OutputDir, rel), data); err != nil {
@@ -177,16 +244,18 @@ func PS5ToPC(options Options) error {
 		}
 	}
 	manifest := map[string]any{
-		"tool_version": ToolVersion,
-		"created":      time.Now().UTC().Format(time.RFC3339),
-		"direction":    "ps5-to-pc-via-garlic",
-		"game":         profile.Key,
-		"game_name":    profile.Name,
-		"title_ids":    profile.TitleIDs,
-		"garlic":       options.GarlicURL,
-		"ps5_uid":      options.PS5UID,
-		"backup_dir":   backupDir,
-		"plugin":       result.Manifest,
+		"tool_version":      ToolVersion,
+		"created":           time.Now().UTC().Format(time.RFC3339),
+		"direction":         "ps5-to-pc-via-garlic",
+		"game":              profile.Key,
+		"game_name":         profile.Name,
+		"title_ids":         profile.TitleIDs,
+		"garlic":            options.GarlicURL,
+		"ps5_uid":           options.PS5UID,
+		"backup_dir":        backupDir,
+		"overrides_allowed": options.Allow,
+		"overrides_fired":   result.OverriddenChecks,
+		"plugin":            result.Manifest,
 	}
 	if err := writeJSON(filepath.Join(options.OutputDir, "garlic_sync_manifest.json"), manifest); err != nil {
 		return err
@@ -206,6 +275,16 @@ func PCToPS5(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
 	selected, err := selectGame(options, client)
+	if err != nil {
+		return err
+	}
+	if options.AllowAll {
+		return fmt.Errorf("--allow-all is not permitted for pc-to-ps5; name each bypassed check individually with --allow")
+	}
+	if len(options.Allow) > 0 && !(options.Apply && options.Yes) {
+		return fmt.Errorf("bypassing a portability check for pc-to-ps5 requires --apply --yes")
+	}
+	overrides, err := BuildOverrides(selected.Engine.OverrideTokens(), options.Allow, false)
 	if err != nil {
 		return err
 	}
@@ -230,10 +309,11 @@ func PCToPS5(options Options) error {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := selected.Engine.ConvertToPS5(selected.Config, options.PCDir, ps5Templates)
+	result, err := selected.Engine.ConvertToPS5(selected.Config, options.PCDir, ps5Templates, overrides)
 	if err != nil {
 		return err
 	}
+	warnUnusedOverrides(log, options.Allow, result.OverriddenChecks)
 	printWarnings(log, result.Warnings)
 	for saveName, data := range result.Outputs {
 		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadBySaveName[saveName]), data); err != nil {
@@ -241,17 +321,19 @@ func PCToPS5(options Options) error {
 		}
 	}
 	manifest := map[string]any{
-		"tool_version":   ToolVersion,
-		"created":        time.Now().UTC().Format(time.RFC3339),
-		"direction":      "pc-to-ps5-via-garlic",
-		"game":           profile.Key,
-		"game_name":      profile.Name,
-		"title_ids":      profile.TitleIDs,
-		"garlic":         options.GarlicURL,
-		"ps5_uid":        options.PS5UID,
-		"applied_to_ps5": options.Apply,
-		"backup_dir":     backupDir,
-		"plugin":         result.Manifest,
+		"tool_version":      ToolVersion,
+		"created":           time.Now().UTC().Format(time.RFC3339),
+		"direction":         "pc-to-ps5-via-garlic",
+		"game":              profile.Key,
+		"game_name":         profile.Name,
+		"title_ids":         profile.TitleIDs,
+		"garlic":            options.GarlicURL,
+		"ps5_uid":           options.PS5UID,
+		"applied_to_ps5":    options.Apply,
+		"backup_dir":        backupDir,
+		"overrides_allowed": options.Allow,
+		"overrides_fired":   result.OverriddenChecks,
+		"plugin":            result.Manifest,
 	}
 	if err := writeJSON(filepath.Join(options.OutputDir, "garlic_sync_manifest.json"), manifest); err != nil {
 		return err

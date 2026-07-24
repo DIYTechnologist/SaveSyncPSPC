@@ -3,6 +3,7 @@ package bridge
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,38 @@ func TestSupportedGroupsRequireAllClairImages(t *testing.T) {
 	}
 	if groups[0]["game"] != "clair" || groups[0]["uid"] != "user-a" {
 		t.Fatalf("group = %#v", groups[0])
+	}
+}
+
+func TestBuildOverridesExpandsAllowAll(t *testing.T) {
+	overrides, err := BuildOverrides([]string{"a", "b", "c"}, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{"a", "b", "c"} {
+		if !overrides[token] {
+			t.Fatalf("overrides = %#v, want %s set by --allow-all", overrides, token)
+		}
+	}
+}
+
+func TestBuildOverridesRejectsUnknownToken(t *testing.T) {
+	_, err := BuildOverrides([]string{"a", "b"}, []string{"a", "bogus"}, false)
+	if err == nil {
+		t.Fatal("expected error for unknown token")
+	}
+	if got := err.Error(); !strings.Contains(got, "bogus") || !strings.Contains(got, "a, b") {
+		t.Fatalf("error = %q, want it to name the bad token and list valid ones", got)
+	}
+}
+
+func TestBuildOverridesAcceptsKnownTokens(t *testing.T) {
+	overrides, err := BuildOverrides([]string{"a", "b"}, []string{"a"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !overrides["a"] || overrides["b"] {
+		t.Fatalf("overrides = %#v, want only a set", overrides)
 	}
 }
 

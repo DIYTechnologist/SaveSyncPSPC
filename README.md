@@ -91,6 +91,20 @@ backup/<game>-<yyyymmddhhmmss>/
 
 The `PC/` directory contains copies of the current local PC save files. The `PS5/` directory contains the payloads downloaded from Garlic, grouped by Garlic save image. These files are not converted or uploaded; they are left as restore points. Use `--backup-root` to choose a different backup root.
 
+Before any of that, a portability gate checks every save image for things that would make a graft unsafe or meaningless (wrong game, account-bound save, unmapped save-class pair, etc.) and blocks the whole run if anything fails. Inspect a save without converting or writing anything:
+
+```sh
+./bin/save-sync \
+  --garlic http://192.168.2.67:8082 \
+  --game clair \
+  --ps5-uid 1ea2f4d9 \
+  inspect \
+  --pc-dir ./SaveGames \
+  --record
+```
+
+If a check blocks a run you believe is actually fine, bypass just that check with `--allow <check>` (see `docs/dev.md`'s "Portability Gate" section for the full list of checks and the override rules).
+
 Pull PS5 payloads from Garlic and create PC save files:
 
 ```sh
@@ -231,16 +245,18 @@ The metadata maps one or more PS5 title IDs to a stable game key, and declares i
   ],
   "engine": "unreal",
   "engine_config": {
-    "module": "Sandfall",
+    "module": "",
     "images": [
       { "logical": "gameplay", "save_name": "sdimg_EXPEDITION0", "pc_file": "EXPEDITION_0.sav", "payload": "ue4savegame.dpx.sav" }
     ],
     "class_equivalence": [
-      { "logical": "gameplay", "pc": "/Script/Sandfall.BP_SaveGameObject_V8_C", "ps5": "/Script/Sandfall.BP_SaveGameObject_V7_C", "verified": true }
+      { "logical": "gameplay", "pc": "BP_SaveGameObject_V8_C", "ps5": "BP_SaveGameObject_V7_C", "verified": true }
     ]
   }
 }
 ```
+
+`class_equivalence` rows match by class-name suffix, not full path — real Unreal Blueprint SaveGame classes are full content paths (e.g. `/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V7.BP_SaveGameObject_V7_C`), and the content-folder prefix isn't a reliable signal, so only the part after the last `.` is configured and checked. `module` only applies to native (`/Script/...`) classes; leave it empty for Blueprint-based games like Clair.
 
 A new game on an already-supported engine (another Unreal title, for instance) is just a new `games/<key>.json` — no Go code required. See "Engine Abstraction" in `docs/dev.md` for the full schema and how to add a genuinely new engine.
 
@@ -277,4 +293,5 @@ CI runs on pushes to `master` and pull requests. Successful `master` builds uplo
 - Do not point `--output-dir` at the PC save directory. The tool refuses some dangerous paths, but separate output directories are easier to inspect and recover from.
 - `--apply --yes` writes replacement payloads back to PS5 through Garlic. Use the dry-run output first and verify the generated manifest.
 - This project is not a PS5 save ownership, resigning, or decryption tool.
+- The portability gate has been checked end-to-end against a real Clair save on both platforms (real PC save + both PS5 users) - every check passes cleanly, including the pairwise class-map/package-version checks that need both sides. That's one save family and one save state, though; if a check ever false-positives on a future save, `save-sync inspect` shows why without writing anything, and `--allow <check>` bypasses a specific one you've confirmed is fine.
 - `save-sync-ui` has no authentication. Anyone who can reach its port can make this process issue GET/POST requests to whatever Garlic URL they submit. The default `--host 127.0.0.1` keeps it reachable only from the local machine; `make docker-ui` binds `0.0.0.0` so the container's published port is reachable, so only run `docker-ui` on networks you trust, and don't expose that port beyond your LAN.

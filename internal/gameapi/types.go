@@ -31,6 +31,12 @@ type ConversionResult struct {
 	Outputs  map[string][]byte
 	Manifest map[string]any
 	Warnings []string
+	// OverriddenChecks lists (deduplicated) the portability-gate check
+	// names that actually fired an override during this conversion. A
+	// caller-supplied --allow token not appearing here bypassed nothing -
+	// worth a loud warning, since a no-op override is easy to mistake for
+	// a working one.
+	OverriddenChecks []string
 }
 
 type Profile struct {
