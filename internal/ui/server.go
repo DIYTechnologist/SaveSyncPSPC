@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"savesyncpspc/internal/bridge"
-	"savesyncpspc/internal/garlic"
 	"savesyncpspc/internal/games"
+	"savesyncpspc/internal/garlic"
 )
 
 type Server struct {
@@ -335,4 +335,3 @@ async function runSync(apply){const body=requestBase(); body.direction=$('direct
 async function runInstall(){const body=requestBase(); body.direction='ps5-to-pc'; body.install=true; body.apply=false; body.yes=false; try{log('Running PS5 to PC with install...'); const data=await api('/api/run',body); log(data.log||'Done.');}catch(e){log('Install error: '+e.message);}}
 loadGames();
 </script></body></html>`
-

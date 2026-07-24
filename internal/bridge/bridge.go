@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"savesyncpspc/internal/gameapi"
-	"savesyncpspc/internal/garlic"
 	"savesyncpspc/internal/games"
+	"savesyncpspc/internal/garlic"
 )
 
 const ToolVersion = "0.2.0"
@@ -237,17 +237,17 @@ func PCToPS5(options Options) error {
 		}
 	}
 	manifest := map[string]any{
-		"tool_version":    ToolVersion,
-		"created":         time.Now().UTC().Format(time.RFC3339),
-		"direction":       "pc-to-ps5-via-garlic",
-		"game":            profile.Key,
-		"game_name":       profile.Name,
-		"title_ids":       profile.TitleIDs,
-		"garlic":          options.GarlicURL,
-		"ps5_uid":         options.PS5UID,
-		"applied_to_ps5":  options.Apply,
-		"backup_dir":      backupDir,
-		"plugin":          result.Manifest,
+		"tool_version":   ToolVersion,
+		"created":        time.Now().UTC().Format(time.RFC3339),
+		"direction":      "pc-to-ps5-via-garlic",
+		"game":           profile.Key,
+		"game_name":      profile.Name,
+		"title_ids":      profile.TitleIDs,
+		"garlic":         options.GarlicURL,
+		"ps5_uid":        options.PS5UID,
+		"applied_to_ps5": options.Apply,
+		"backup_dir":     backupDir,
+		"plugin":         result.Manifest,
 	}
 	if err := writeJSON(filepath.Join(options.OutputDir, "garlic_sync_manifest.json"), manifest); err != nil {
 		return err
@@ -391,4 +391,3 @@ func boolValue(value any) bool {
 		return false
 	}
 }
-

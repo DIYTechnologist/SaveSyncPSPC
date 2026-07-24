@@ -31,4 +31,3 @@ func syntheticGVAS(saveClass string, payload []byte, packageUE4 uint32) []byte {
 	buf.Write(payload)
 	return buf.Bytes()
 }
-

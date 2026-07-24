@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "????.????.??????"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. 2026.0724.153000"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve tag
+        id: ref
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.ref.outputs.tag }}
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - name: Test
+        run: make test
+
+      - name: Build release binaries
+        run: make release VERSION="${{ steps.ref.outputs.tag }}"
+
+      - name: Package release assets
+        run: |
+          tag="${{ steps.ref.outputs.tag }}"
+          mkdir -p release
+          tar -C dist/linux-amd64 -czf "release/save-sync-ps-pc_${tag}_linux-amd64.tar.gz" .
+          tar -C dist/linux-arm64 -czf "release/save-sync-ps-pc_${tag}_linux-arm64.tar.gz" .
+          tar -C dist/windows-amd64 -czf "release/save-sync-ps-pc_${tag}_windows-amd64.tar.gz" .
+          (cd release && sha256sum * > "save-sync-ps-pc_${tag}_checksums.txt")
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: save-sync-ps-pc-release-${{ steps.ref.outputs.tag }}
+          path: release/
+          retention-days: 1
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ steps.ref.outputs.tag }}"
+          gh release create "$tag" release/* \
+            --title "$tag" \
+            --generate-notes

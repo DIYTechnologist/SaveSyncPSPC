@@ -44,4 +44,3 @@ type Game interface {
 	ConvertToPS5(pcDir string, ps5Templates map[string][]byte) (ConversionResult, error)
 	InstallOutputs(outputs map[string][]byte, pcDir string, backupDir string) error
 }
-

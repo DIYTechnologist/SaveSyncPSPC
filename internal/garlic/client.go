@@ -226,4 +226,3 @@ func boolValue(value any) bool {
 		return false
 	}
 }
-

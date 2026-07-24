@@ -241,4 +241,3 @@ func ConvertWithEnvelope(sourceData, targetTemplate []byte, sourceLabel, targetL
 	}
 	return converted, source, target, result, nil
 }
-

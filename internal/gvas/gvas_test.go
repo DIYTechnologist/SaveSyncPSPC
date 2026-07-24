@@ -74,4 +74,3 @@ func TestConvertWithEnvelopeRejectsPackageMismatch(t *testing.T) {
 		t.Fatal("expected mismatch error")
 	}
 }
-
