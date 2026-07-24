@@ -272,3 +272,4 @@ CI runs on pushes to `master` and pull requests. Successful `master` builds uplo
 - Do not point `--output-dir` at the PC save directory. The tool refuses some dangerous paths, but separate output directories are easier to inspect and recover from.
 - `--apply --yes` writes replacement payloads back to PS5 through Garlic. Use the dry-run output first and verify the generated manifest.
 - This project is not a PS5 save ownership, resigning, or decryption tool.
+- `save-sync-ui` has no authentication. Anyone who can reach its port can make this process issue GET/POST requests to whatever Garlic URL they submit. The default `--host 127.0.0.1` keeps it reachable only from the local machine; `make docker-ui` binds `0.0.0.0` so the container's published port is reachable, so only run `docker-ui` on networks you trust, and don't expose that port beyond your LAN.

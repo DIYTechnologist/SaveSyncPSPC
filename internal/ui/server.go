@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"savesyncpspc/internal/bridge"
 	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
+	"savesyncpspc/internal/util"
 )
 
 type Server struct {
@@ -73,7 +76,11 @@ func (s Server) apiSaves(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	client := garlic.New(fmt.Sprint(req["garlic"]), timeout(req))
+	client, err := newGarlicClient(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
 	users, userErr := client.Users()
 	if userErr != nil {
 		users = []garlic.User{{"id": "", "name": "Unable to load users: " + userErr.Error()}}
@@ -121,7 +128,11 @@ func (s Server) apiUsers(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	client := garlic.New(fmt.Sprint(req["garlic"]), timeout(req))
+	client, err := newGarlicClient(req)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
 	users, err := client.Users()
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
@@ -137,6 +148,10 @@ func (s Server) apiRun(w http.ResponseWriter, r *http.Request) {
 	}
 	req, err := readJSON(r)
 	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := validateGarlicURL(fmt.Sprint(req["garlic"])); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
@@ -188,7 +203,10 @@ func (s Server) apiRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s Server) validateGroupOnly(req map[string]any) (string, error) {
-	client := garlic.New(fmt.Sprint(req["garlic"]), timeout(req))
+	client, err := newGarlicClient(req)
+	if err != nil {
+		return "", err
+	}
 	saves, err := client.Saves()
 	if err != nil {
 		return "", err
@@ -217,6 +235,48 @@ func (s Server) validateGroupOnly(req map[string]any) (string, error) {
 	}
 	group := filtered[0]
 	return fmt.Sprintf("Dry run validation OK.\nSelected: %s / %s / uid %s\nRequired Garlic save images are present.\n\nNo PC save directory was supplied, so no conversion was attempted.", group["game_name"], group["title_id"], group["uid"]), nil
+}
+
+// newGarlicClient builds a Garlic client from a browser-supplied request,
+// validating the target URL first. req["garlic"] is taken verbatim from an
+// unauthenticated HTTP endpoint (see validateGarlicURL for why that matters).
+func newGarlicClient(req map[string]any) (*garlic.Client, error) {
+	raw := fmt.Sprint(req["garlic"])
+	if err := validateGarlicURL(raw); err != nil {
+		return nil, err
+	}
+	return garlic.New(raw, timeout(req)), nil
+}
+
+// validateGarlicURL rejects Garlic URLs that would let this server be used
+// as an open proxy against link-local/metadata addresses. The UI has no
+// auth, so anything reachable on its port can otherwise ask this process to
+// issue arbitrary GET/POST requests (e.g. to a cloud metadata endpoint) on
+// its behalf. Ordinary LAN/loopback targets, which is what this tool is
+// for, are left untouched.
+func validateGarlicURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid garlic URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("garlic URL must use http or https")
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("garlic URL is missing a host")
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		// Not resolvable here; let the HTTP client surface the real error.
+		return nil
+	}
+	for _, ip := range ips {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("refusing to contact link-local address %s (e.g. cloud metadata endpoints); point --garlic at your PS5's LAN address", ip)
+		}
+	}
+	return nil
 }
 
 func readJSON(r *http.Request) (map[string]any, error) {
@@ -263,20 +323,11 @@ func defaultString(value, fallback string) string {
 }
 
 func boolValue(value any) bool {
-	return boolValueDefault(value, false)
+	return util.BoolValue(value, false)
 }
 
 func boolValueDefault(value any, fallback bool) bool {
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return typed == "true" || typed == "1"
-	case nil:
-		return fallback
-	default:
-		return fallback
-	}
+	return util.BoolValue(value, fallback)
 }
 
 const indexHTML = `<!doctype html>

@@ -9,7 +9,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"savesyncpspc/internal/util"
 )
 
 type Save map[string]any
@@ -18,6 +21,10 @@ type User map[string]any
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+
+	savesOnce sync.Once
+	savesData []Save
+	savesErr  error
 }
 
 func New(baseURL string, timeout time.Duration) *Client {
@@ -39,17 +46,16 @@ func (c *Client) endpoint(path string, query map[string]string) string {
 	return u + "?" + values.Encode()
 }
 
-func (c *Client) RequestBytes(path string, query map[string]string, data []byte) ([]byte, string, error) {
+func (c *Client) RequestBytes(method, path string, query map[string]string, data []byte) ([]byte, string, error) {
 	var body io.Reader
 	if data != nil {
 		body = bytes.NewReader(data)
 	}
-	req, err := http.NewRequest(http.MethodGet, c.endpoint(path, query), body)
+	req, err := http.NewRequest(method, c.endpoint(path, query), body)
 	if err != nil {
 		return nil, "", err
 	}
 	if data != nil {
-		req.Method = http.MethodPost
 		req.Header.Set("Content-Type", "application/octet-stream")
 	}
 	resp, err := c.HTTP.Do(req)
@@ -67,8 +73,8 @@ func (c *Client) RequestBytes(path string, query map[string]string, data []byte)
 	return raw, resp.Header.Get("Content-Type"), nil
 }
 
-func (c *Client) RequestJSON(path string, query map[string]string, data []byte) (map[string]any, error) {
-	raw, _, err := c.RequestBytes(path, query, data)
+func (c *Client) RequestJSON(method, path string, query map[string]string, data []byte) (map[string]any, error) {
+	raw, _, err := c.RequestBytes(method, path, query, data)
 	if err != nil {
 		return nil, err
 	}
@@ -82,26 +88,36 @@ func (c *Client) RequestJSON(path string, query map[string]string, data []byte) 
 	return value, nil
 }
 
+// Saves fetches /api/saves and memoizes the result for the lifetime of this
+// Client. Callers like FindSaveIndex, selectGame, and SupportedGroups all
+// want the same snapshot within one CLI run or UI request, so repeated
+// calls reuse the first successful fetch instead of round-tripping to
+// Garlic again.
 func (c *Client) Saves() ([]Save, error) {
-	data, err := c.RequestJSON("/api/saves", nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	raw, ok := data["saves"].([]any)
-	if !ok {
-		return nil, fmt.Errorf("Garlic /api/saves response did not contain a saves list")
-	}
-	saves := make([]Save, 0, len(raw))
-	for _, item := range raw {
-		if save, ok := item.(map[string]any); ok {
-			saves = append(saves, Save(save))
+	c.savesOnce.Do(func() {
+		data, err := c.RequestJSON(http.MethodGet, "/api/saves", nil, nil)
+		if err != nil {
+			c.savesErr = err
+			return
 		}
-	}
-	return saves, nil
+		raw, ok := data["saves"].([]any)
+		if !ok {
+			c.savesErr = fmt.Errorf("Garlic /api/saves response did not contain a saves list")
+			return
+		}
+		saves := make([]Save, 0, len(raw))
+		for _, item := range raw {
+			if save, ok := item.(map[string]any); ok {
+				saves = append(saves, Save(save))
+			}
+		}
+		c.savesData = saves
+	})
+	return c.savesData, c.savesErr
 }
 
 func (c *Client) Users() ([]User, error) {
-	data, err := c.RequestJSON("/api/users", nil, nil)
+	data, err := c.RequestJSON(http.MethodGet, "/api/users", nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -119,19 +135,22 @@ func (c *Client) Users() ([]User, error) {
 }
 
 func (c *Client) Mount(idx int) error {
-	_, err := c.RequestJSON("/api/mount", map[string]string{"idx": strconv.Itoa(idx)}, nil)
+	_, err := c.RequestJSON(http.MethodGet, "/api/mount", map[string]string{"idx": strconv.Itoa(idx)}, nil)
 	return err
 }
 
 func (c *Client) Unmount() error {
-	_, err := c.RequestJSON("/api/unmount", nil, nil)
+	_, err := c.RequestJSON(http.MethodGet, "/api/unmount", nil, nil)
 	return err
 }
 
 func (c *Client) DownloadFile(name string) ([]byte, error) {
-	raw, ctype, err := c.RequestBytes("/api/download_file", map[string]string{"name": name}, nil)
+	raw, ctype, err := c.RequestBytes(http.MethodGet, "/api/download_file", map[string]string{"name": name}, nil)
 	if err != nil {
 		return nil, err
+	}
+	if len(raw) == 0 {
+		return nil, fmt.Errorf("Garlic returned an empty response downloading %s", name)
 	}
 	stripped := strings.TrimSpace(string(raw[:min(len(raw), 64)]))
 	if strings.Contains(ctype, "application/json") || strings.HasPrefix(stripped, "{") {
@@ -146,7 +165,10 @@ func (c *Client) DownloadFile(name string) ([]byte, error) {
 }
 
 func (c *Client) UploadFile(name string, data []byte) error {
-	_, err := c.RequestJSON("/api/upload_file", map[string]string{"name": name}, data)
+	if data == nil {
+		data = []byte{}
+	}
+	_, err := c.RequestJSON(http.MethodPost, "/api/upload_file", map[string]string{"name": name}, data)
 	return err
 }
 
@@ -171,7 +193,7 @@ func (c *Client) FindSaveIndex(titleIDs []string, saveName string, uid string) (
 		if fmt.Sprint(save["save_name"]) != saveName {
 			continue
 		}
-		if fmt.Sprint(save["type"]) != "ps5" || boolValue(save["backup"]) || boolValue(save["usb"]) {
+		if fmt.Sprint(save["type"]) != "ps5" || util.BoolValue(save["backup"], false) || util.BoolValue(save["usb"], false) {
 			continue
 		}
 		if uid != "" && fmt.Sprint(save["uid"]) != uid {
@@ -214,15 +236,4 @@ func (c *Client) ReplacePayload(titleIDs []string, saveName, payloadName string,
 	}
 	defer c.Unmount()
 	return c.UploadFile(payloadName, data)
-}
-
-func boolValue(value any) bool {
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return typed == "true" || typed == "1"
-	default:
-		return false
-	}
 }

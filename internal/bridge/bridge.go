@@ -11,6 +11,7 @@ import (
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
+	"savesyncpspc/internal/util"
 )
 
 const ToolVersion = "0.2.0"
@@ -39,29 +40,16 @@ func (o Options) logger() func(string) {
 	return func(message string) { fmt.Println(message) }
 }
 
+// AtomicWrite writes data to path via a temp file + fsync + rename.
 func AtomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return util.AtomicWrite(path, data)
 }
+
+// outputDirMarker is written into every output directory this tool
+// produces. PrepareOutputDir uses it to tell "a directory we created on a
+// previous run" apart from an arbitrary non-empty directory the user
+// pointed --output-dir at, before deciding whether --force may delete it.
+const outputDirMarker = "garlic_sync_manifest.json"
 
 func PrepareOutputDir(outputDir string, force bool, protected []string) error {
 	resolved, err := filepath.Abs(outputDir)
@@ -86,9 +74,21 @@ func PrepareOutputDir(outputDir string, force bool, protected []string) error {
 	if dangerous[resolved] {
 		return fmt.Errorf("refusing to use dangerous output directory: %s", resolved)
 	}
-	if _, err := os.Stat(outputDir); err == nil {
+	if info, err := os.Stat(outputDir); err == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("output path exists and is not a directory: %s", outputDir)
+		}
 		if !force {
 			return fmt.Errorf("output directory already exists: %s; use --force", outputDir)
+		}
+		entries, err := os.ReadDir(outputDir)
+		if err != nil {
+			return err
+		}
+		if len(entries) > 0 {
+			if _, err := os.Stat(filepath.Join(outputDir, outputDirMarker)); err != nil {
+				return fmt.Errorf("refusing to remove non-empty output directory not created by a previous run (no %s found): %s", outputDirMarker, resolved)
+			}
 		}
 		if err := os.RemoveAll(outputDir); err != nil {
 			return err
@@ -327,7 +327,7 @@ func SupportedGroups(gamesDir string, saves []garlic.Save) ([]map[string]any, er
 			if !titleSet[strings.ToUpper(fmt.Sprint(save["title_id"]))] {
 				continue
 			}
-			if fmt.Sprint(save["type"]) != "ps5" || boolValue(save["backup"]) || boolValue(save["usb"]) {
+			if fmt.Sprint(save["type"]) != "ps5" || util.BoolValue(save["backup"], false) || util.BoolValue(save["usb"], false) {
 				continue
 			}
 			saveName := fmt.Sprint(save["save_name"])
@@ -379,15 +379,4 @@ func SupportedGroups(gamesDir string, saves []garlic.Save) ([]map[string]any, er
 		}
 	}
 	return groups, nil
-}
-
-func boolValue(value any) bool {
-	switch typed := value.(type) {
-	case bool:
-		return typed
-	case string:
-		return typed == "true" || typed == "1"
-	default:
-		return false
-	}
 }

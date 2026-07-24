@@ -9,6 +9,7 @@ import (
 
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/gvas"
+	"savesyncpspc/internal/util"
 )
 
 const (
@@ -189,45 +190,13 @@ func (Game) InstallOutputs(outputs map[string][]byte, pcDir string, backupDir st
 		source := filepath.Join(pcDir, name)
 		backup := filepath.Join(backupDir, name)
 		if _, err := os.Stat(backup); os.IsNotExist(err) {
-			if err := copyFile(source, backup); err != nil {
+			if err := util.CopyFile(source, backup); err != nil {
 				return err
 			}
 		}
-		if err := atomicWrite(source, outputs[name]); err != nil {
+		if err := util.AtomicWrite(source, outputs[name]); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func atomicWrite(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
-}
-
-func copyFile(source, dest string) error {
-	data, err := os.ReadFile(source)
-	if err != nil {
-		return err
-	}
-	return atomicWrite(dest, data)
 }

@@ -68,6 +68,9 @@ func run(args []string) error {
 	if err := sub.Parse(args[commandIndex+1:]); err != nil {
 		return err
 	}
+	if *pcDir != "" && *steamDir != "" && *pcDir != *steamDir {
+		fmt.Fprintln(os.Stderr, "Warning: both --pc-dir and --steam-dir were set; using --pc-dir and ignoring --steam-dir")
+	}
 	if *pcDir == "" {
 		*pcDir = *steamDir
 	}
