@@ -153,6 +153,8 @@ Example:
 }
 ```
 
+`games/*.json` is embedded into the binaries via `//go:embed` in the root `embed.go` (`Builtin`), so a rebuild is required to pick up a new game added here. On-disk files under `--games-dir` (default `games`, resolved against cwd) override/extend the embedded ones by `game` key, and are edited in place without a rebuild. The first time that directory doesn't exist, `save-sync`/`save-sync-ui` create it and seed it with a copy of the embedded metadata (best effort; never overwrites an existing directory or file), so a plain run in any cwd ends up with an editable `games/` folder there.
+
 2. Add a package under `internal/games/<game>/`.
 
 The package must implement `gameapi.Game`:

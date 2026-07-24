@@ -19,3 +19,9 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 "${GO_BIN}" build -ldflags "${LDFLAGS}" -o
 
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${GO_BIN}" build -ldflags "${LDFLAGS}" -o "${DIST_DIR}/windows-amd64/save-sync.exe" ./cmd/save-sync
 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 "${GO_BIN}" build -ldflags "${LDFLAGS}" -o "${DIST_DIR}/windows-amd64/save-sync-ui.exe" ./cmd/save-sync-ui
+
+# Game metadata is embedded in the binaries, but ship it on disk too so
+# users can see and edit it without needing a source checkout.
+cp -r games "${DIST_DIR}/linux-amd64/games"
+cp -r games "${DIST_DIR}/linux-arm64/games"
+cp -r games "${DIST_DIR}/windows-amd64/games"

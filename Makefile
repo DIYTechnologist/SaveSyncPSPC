@@ -72,6 +72,8 @@ docker-bin: docker-build
 	$(DOCKER) create --name save-sync-bin-tmp $(IMAGE)
 	$(DOCKER) cp save-sync-bin-tmp:/usr/local/bin/save-sync $(DIST_DIR)/docker/save-sync
 	$(DOCKER) cp save-sync-bin-tmp:/usr/local/bin/save-sync-ui $(DIST_DIR)/docker/save-sync-ui
+	rm -rf $(DIST_DIR)/docker/games
+	$(DOCKER) cp save-sync-bin-tmp:/app/games $(DIST_DIR)/docker/games
 	$(DOCKER) rm save-sync-bin-tmp
 
 docker-release:

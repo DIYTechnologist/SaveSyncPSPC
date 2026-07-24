@@ -8,10 +8,16 @@ import (
 	"sort"
 	"strings"
 
+	"savesyncpspc"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/games/clair"
+	"savesyncpspc/internal/util"
 )
 
+// DefaultGamesDir is the on-disk override/extension directory checked in
+// addition to the metadata embedded in the binary (see Builtin in the
+// root package). It doesn't need to exist; a missing or empty directory
+// here is not an error as long as at least one game's metadata resolves.
 func DefaultGamesDir() string {
 	return "games"
 }
@@ -36,43 +42,112 @@ func Registered(key string) (gameapi.Game, bool) {
 	return game, ok
 }
 
+// Profiles loads game metadata, merging the metadata embedded in the
+// binary with whatever *.json files are found under gamesDir. On-disk
+// files take precedence over an embedded file with the same game key,
+// so editing a materialized games/<game>.json next to the binary
+// overrides the built-in default. The first time gamesDir doesn't exist,
+// it's created and seeded from the embedded defaults (best effort - see
+// materializeBuiltinGamesDir); an absent or empty on-disk directory is
+// never an error as long as at least one game's metadata resolves.
 func Profiles(gamesDir string) (map[string]gameapi.Profile, error) {
-	entries, err := filepath.Glob(filepath.Join(gamesDir, "*.json"))
+	profiles := map[string]gameapi.Profile{}
+
+	embedded, err := savesyncpspc.Builtin.ReadDir("games")
 	if err != nil {
 		return nil, err
 	}
-	if len(entries) == 0 {
-		return nil, fmt.Errorf("games directory contains no metadata: %s", gamesDir)
-	}
-	sort.Strings(entries)
-	profiles := map[string]gameapi.Profile{}
-	for _, path := range entries {
-		raw, err := os.ReadFile(path)
+	sort.Slice(embedded, func(i, j int) bool { return embedded[i].Name() < embedded[j].Name() })
+	for _, entry := range embedded {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		raw, err := savesyncpspc.Builtin.ReadFile("games/" + entry.Name())
 		if err != nil {
 			return nil, err
 		}
-		var meta metadata
-		if err := json.Unmarshal(raw, &meta); err != nil {
-			return nil, fmt.Errorf("invalid game metadata JSON: %s: %w", path, err)
+		if err := addProfile(profiles, "embedded:"+entry.Name(), raw); err != nil {
+			return nil, err
 		}
-		key := strings.TrimSpace(meta.Game)
-		if key == "" {
-			key = strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		}
-		ids, err := parseIDs(meta)
+	}
+
+	if gamesDir != "" {
+		materializeBuiltinGamesDir(gamesDir)
+		paths, err := filepath.Glob(filepath.Join(gamesDir, "*.json"))
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", path, err)
+			return nil, err
 		}
-		if len(ids) == 0 {
-			return nil, fmt.Errorf("no title ids defined in %s", path)
+		sort.Strings(paths)
+		for _, path := range paths {
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				return nil, err
+			}
+			if err := addProfile(profiles, path, raw); err != nil {
+				return nil, err
+			}
 		}
-		name := meta.Name
-		if name == "" {
-			name = key
-		}
-		profiles[key] = gameapi.Profile{Key: key, Name: name, TitleIDs: ids, MetadataPath: path}
+	}
+
+	if len(profiles) == 0 {
+		return nil, fmt.Errorf("no game metadata available (checked built-ins and %s)", gamesDir)
 	}
 	return profiles, nil
+}
+
+// materializeBuiltinGamesDir seeds gamesDir with a copy of the embedded
+// game metadata the first time it's used, so a plain `save-sync ...` run
+// from any directory ends up with an editable, visible games/ folder
+// there instead of the metadata living only inside the binary. It never
+// overwrites a directory or file that already exists, and any failure
+// (e.g. a read-only cwd) is silently non-fatal: Profiles already works
+// off the embedded defaults with or without this.
+func materializeBuiltinGamesDir(gamesDir string) {
+	if _, err := os.Stat(gamesDir); err == nil || !os.IsNotExist(err) {
+		return
+	}
+	entries, err := savesyncpspc.Builtin.ReadDir("games")
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(gamesDir, entry.Name())
+		if _, err := os.Stat(path); err == nil {
+			continue
+		}
+		raw, err := savesyncpspc.Builtin.ReadFile("games/" + entry.Name())
+		if err != nil {
+			continue
+		}
+		_ = util.AtomicWrite(path, raw)
+	}
+}
+
+func addProfile(profiles map[string]gameapi.Profile, source string, raw []byte) error {
+	var meta metadata
+	if err := json.Unmarshal(raw, &meta); err != nil {
+		return fmt.Errorf("invalid game metadata JSON: %s: %w", source, err)
+	}
+	key := strings.TrimSpace(meta.Game)
+	if key == "" {
+		key = strings.TrimSuffix(filepath.Base(source), filepath.Ext(source))
+	}
+	ids, err := parseIDs(meta)
+	if err != nil {
+		return fmt.Errorf("%s: %w", source, err)
+	}
+	if len(ids) == 0 {
+		return fmt.Errorf("no title ids defined in %s", source)
+	}
+	name := meta.Name
+	if name == "" {
+		name = key
+	}
+	profiles[key] = gameapi.Profile{Key: key, Name: name, TitleIDs: ids, MetadataPath: source}
+	return nil
 }
 
 func parseIDs(meta metadata) ([]string, error) {

@@ -215,7 +215,7 @@ save-sync-ps-pc-checksums.txt
 
 ## Game Discovery
 
-Supported games are described by metadata under `games/` and Go implementations under `internal/games/`.
+Supported games are described by metadata under `games/` and Go implementations under `internal/games/`. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
 
 Each game has:
 

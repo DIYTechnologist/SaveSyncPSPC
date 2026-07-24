@@ -5,6 +5,7 @@ ARG VERSION=dev
 WORKDIR /src
 
 COPY go.mod ./
+COPY embed.go ./
 COPY cmd ./cmd
 COPY internal ./internal
 COPY games ./games
@@ -21,7 +22,10 @@ RUN mkdir -p /dist/linux-amd64 /dist/linux-arm64 /dist/windows-amd64 \
     && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-arm64/save-sync ./cmd/save-sync \
     && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/linux-arm64/save-sync-ui ./cmd/save-sync-ui \
     && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/windows-amd64/save-sync.exe ./cmd/save-sync \
-    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/windows-amd64/save-sync-ui.exe ./cmd/save-sync-ui
+    && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=${VERSION}" -o /dist/windows-amd64/save-sync-ui.exe ./cmd/save-sync-ui \
+    && cp -r games /dist/linux-amd64/games \
+    && cp -r games /dist/linux-arm64/games \
+    && cp -r games /dist/windows-amd64/games
 
 FROM debian:bookworm-slim
 
