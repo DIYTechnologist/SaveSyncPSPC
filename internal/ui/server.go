@@ -53,8 +53,8 @@ func (s Server) apiGames(w http.ResponseWriter, r *http.Request) {
 	var out []map[string]any
 	for _, profile := range profiles {
 		compatibility := any(nil)
-		if game, ok := games.Registered(profile.Key); ok {
-			compatibility = game.Compatibility()
+		if eng, cfg, err := games.ResolveEngine(profile); err == nil {
+			compatibility = eng.Compatibility(cfg)
 		}
 		out = append(out, map[string]any{
 			"key":           profile.Key,

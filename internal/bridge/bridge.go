@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
+	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
@@ -17,20 +19,88 @@ import (
 const ToolVersion = "0.2.0"
 
 type Options struct {
-	GarlicURL  string
-	Timeout    time.Duration
-	PS5UID     string
-	GamesDir   string
-	Game       string
-	TitleID    string
-	BackupRoot string
-	PCDir      string
-	OutputDir  string
-	Force      bool
-	Install    bool
-	Apply      bool
-	Yes        bool
-	Log        func(string)
+	GarlicURL string
+	Timeout   time.Duration
+	PS5UID    string
+	// PS5SaveName selects which Garlic save_name to target for a game
+	// whose save slots aren't a fixed, config-known constant (e.g.
+	// Baldur's Gate 3's sdimg_Save0001/sdimg_Save0002/...). Required
+	// whenever the selected engine's Images() returns an image with
+	// DynamicSaveName set; ignored otherwise (Clair's SaveName is always
+	// config-known, so this is a no-op for it).
+	PS5SaveName string
+	GamesDir    string
+	Game        string
+	TitleID     string
+	BackupRoot  string
+	PCDir       string
+	OutputDir   string
+	Force       bool
+	Install     bool
+	Apply       bool
+	Yes         bool
+	// Allow names portability-gate checks to bypass for this run (see
+	// engine.CheckResult / the unreal engine's gate.go). Unknown tokens
+	// are a hard error. For pc-to-ps5, any non-empty Allow requires Apply
+	// && Yes - console writes must name each bypassed check individually.
+	Allow []string
+	// AllowAll bypasses every tier-2 check for this run. Rejected
+	// outright for pc-to-ps5.
+	AllowAll bool
+	Log      func(string)
+}
+
+// BuildOverrides validates options.Allow against the engine's known check
+// tokens and expands AllowAll, or returns an error naming any unknown
+// token alongside the valid list.
+func BuildOverrides(overrideTokens []string, allow []string, allowAll bool) (map[string]bool, error) {
+	valid := map[string]bool{}
+	for _, token := range overrideTokens {
+		valid[token] = true
+	}
+	overrides := map[string]bool{}
+	if allowAll {
+		for token := range valid {
+			overrides[token] = true
+		}
+	}
+	var unknown []string
+	for _, token := range allow {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		if !valid[token] {
+			unknown = append(unknown, token)
+			continue
+		}
+		overrides[token] = true
+	}
+	if len(unknown) > 0 {
+		validList := make([]string, 0, len(valid))
+		for token := range valid {
+			validList = append(validList, token)
+		}
+		sort.Strings(validList)
+		return nil, fmt.Errorf("unknown --allow check(s): %s; valid checks are: %s", strings.Join(unknown, ", "), strings.Join(validList, ", "))
+	}
+	return overrides, nil
+}
+
+// warnUnusedOverrides loudly flags an --allow token that didn't bypass
+// anything - a silent no-op override is the failure mode that wastes an
+// afternoon, so this is a warning even though it's not an error.
+func warnUnusedOverrides(log func(string), allow []string, fired []string) {
+	firedSet := map[string]bool{}
+	for _, check := range fired {
+		firedSet[check] = true
+	}
+	for _, token := range allow {
+		token = strings.TrimSpace(token)
+		if token != "" && !firedSet[token] {
+			log(fmt.Sprintf("Warning: --allow %s did not bypass anything - that check did not fail on this run.", token))
+		}
+	}
 }
 
 func (o Options) logger() func(string) {
@@ -97,7 +167,7 @@ func PrepareOutputDir(outputDir string, force bool, protected []string) error {
 	return os.MkdirAll(outputDir, 0o755)
 }
 
-func BackupCurrentSaves(backupRoot, game, pcDir, payloadName string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time) (string, error) {
+func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time) (string, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -133,42 +203,104 @@ func BackupCurrentSaves(backupRoot, game, pcDir, payloadName string, ps5Payloads
 		if !ok {
 			return "", fmt.Errorf("missing PS5 payload for %s", image.Logical)
 		}
-		if err := AtomicWrite(filepath.Join(backupDir, "PS5", image.SaveName, payloadName), data); err != nil {
+		if err := AtomicWrite(filepath.Join(backupDir, "PS5", image.SaveName, image.Payload), data); err != nil {
 			return "", err
 		}
 	}
 	return backupDir, nil
 }
 
+// resolveDynamicImages fills in any SaveName/Payload/PCFile fields the
+// engine couldn't know ahead of time (see gameapi.SaveImage's Dynamic*
+// fields), returning a fully-concrete copy of images. This runs before
+// any backup or conversion step, since those need real filenames -
+// there's no static config for a save whose slot and filenames are
+// per-instance (e.g. Baldur's Gate 3).
+//
+// PCFile resolution (discovering an existing local file to read) only
+// runs for direction "pc-to-ps5", where the PC side is the conversion
+// source. For "ps5-to-pc" the PC-side file doesn't exist yet - it's an
+// output the engine names itself (typically from the resolved Payload),
+// not something to discover.
+func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName, direction string) ([]gameapi.SaveImage, error) {
+	resolved := make([]gameapi.SaveImage, len(images))
+	for i, image := range images {
+		if image.DynamicSaveName {
+			if ps5SaveName == "" {
+				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
+			}
+			image.SaveName = ps5SaveName
+		}
+		if image.DynamicPCFile && direction == "pc-to-ps5" {
+			pcFile, err := eng.ResolvePCFile(cfg, image, pcDir)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.PCFile = pcFile
+		}
+		if image.DynamicPayload {
+			_, files, err := client.MountByName(titleIDs, image.SaveName, ps5UID)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			names := make([]string, 0, len(files))
+			for _, f := range files {
+				if !f.Dir {
+					names = append(names, f.Name)
+				}
+			}
+			payload, resolveErr := eng.ResolvePayload(cfg, image, names)
+			if unmountErr := client.Unmount(); unmountErr != nil && resolveErr == nil {
+				resolveErr = fmt.Errorf("unmount: %w", unmountErr)
+			}
+			if resolveErr != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, resolveErr)
+			}
+			image.Payload = payload
+		}
+		resolved[i] = image
+	}
+	return resolved, nil
+}
+
 func PS5ToPC(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
-	profile, game, err := selectGame(options, client)
+	selected, err := selectGame(options, client)
 	if err != nil {
 		return err
 	}
+	overrides, err := BuildOverrides(selected.Engine.OverrideTokens(), options.Allow, options.AllowAll)
+	if err != nil {
+		return err
+	}
+	profile := selected.Profile
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	payloadName := game.PayloadName()
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "ps5-to-pc")
+	if err != nil {
+		return err
+	}
 	ps5Payloads := map[string][]byte{}
-	for _, image := range game.SaveImages() {
-		log(fmt.Sprintf("Pulling %s %s/%s from Garlic...", profile.Name, image.SaveName, payloadName))
-		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, payloadName, options.PS5UID)
+	for _, image := range images {
+		log(fmt.Sprintf("Pulling %s %s/%s from Garlic...", profile.Name, image.SaveName, image.Payload))
+		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, image.Payload, options.PS5UID)
 		if err != nil {
 			return err
 		}
 		ps5Payloads[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, payloadName, ps5Payloads, game.SaveImages(), time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Payloads, images, time.Time{})
 	if err != nil {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := game.ConvertFromPS5(ps5Payloads, options.PCDir)
+	result, err := selected.Engine.ConvertFromPS5(selected.Config, images, ps5Payloads, options.PCDir, overrides)
 	if err != nil {
 		return err
 	}
+	warnUnusedOverrides(log, options.Allow, result.OverriddenChecks)
 	printWarnings(log, result.Warnings)
 	for rel, data := range result.Outputs {
 		if err := AtomicWrite(filepath.Join(options.OutputDir, rel), data); err != nil {
@@ -176,23 +308,25 @@ func PS5ToPC(options Options) error {
 		}
 	}
 	manifest := map[string]any{
-		"tool_version": ToolVersion,
-		"created":      time.Now().UTC().Format(time.RFC3339),
-		"direction":    "ps5-to-pc-via-garlic",
-		"game":         profile.Key,
-		"game_name":    profile.Name,
-		"title_ids":    profile.TitleIDs,
-		"garlic":       options.GarlicURL,
-		"ps5_uid":      options.PS5UID,
-		"backup_dir":   backupDir,
-		"plugin":       result.Manifest,
+		"tool_version":      ToolVersion,
+		"created":           time.Now().UTC().Format(time.RFC3339),
+		"direction":         "ps5-to-pc-via-garlic",
+		"game":              profile.Key,
+		"game_name":         profile.Name,
+		"title_ids":         profile.TitleIDs,
+		"garlic":            options.GarlicURL,
+		"ps5_uid":           options.PS5UID,
+		"backup_dir":        backupDir,
+		"overrides_allowed": options.Allow,
+		"overrides_fired":   result.OverriddenChecks,
+		"plugin":            result.Manifest,
 	}
 	if err := writeJSON(filepath.Join(options.OutputDir, "garlic_sync_manifest.json"), manifest); err != nil {
 		return err
 	}
 	log("Created converted PC files in: " + options.OutputDir)
 	if options.Install {
-		if err := game.InstallOutputs(result.Outputs, options.PCDir, filepath.Join(backupDir, "PC")); err != nil {
+		if err := selected.Engine.InstallOutputs(selected.Config, result.Outputs, options.PCDir, filepath.Join(backupDir, "PC")); err != nil {
 			return err
 		}
 		log("Installed into PC directory: " + options.PCDir)
@@ -204,50 +338,69 @@ func PS5ToPC(options Options) error {
 func PCToPS5(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
-	profile, game, err := selectGame(options, client)
+	selected, err := selectGame(options, client)
 	if err != nil {
 		return err
 	}
+	if options.AllowAll {
+		return fmt.Errorf("--allow-all is not permitted for pc-to-ps5; name each bypassed check individually with --allow")
+	}
+	if len(options.Allow) > 0 && !(options.Apply && options.Yes) {
+		return fmt.Errorf("bypassing a portability check for pc-to-ps5 requires --apply --yes")
+	}
+	overrides, err := BuildOverrides(selected.Engine.OverrideTokens(), options.Allow, false)
+	if err != nil {
+		return err
+	}
+	profile := selected.Profile
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	payloadName := game.PayloadName()
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "pc-to-ps5")
+	if err != nil {
+		return err
+	}
+	payloadBySaveName := map[string]string{}
 	ps5Templates := map[string][]byte{}
-	for _, image := range game.SaveImages() {
-		log(fmt.Sprintf("Pulling PS5 template %s %s/%s from Garlic...", profile.Name, image.SaveName, payloadName))
-		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, payloadName, options.PS5UID)
+	for _, image := range images {
+		payloadBySaveName[image.SaveName] = image.Payload
+		log(fmt.Sprintf("Pulling PS5 template %s %s/%s from Garlic...", profile.Name, image.SaveName, image.Payload))
+		data, err := client.FetchPayload(profile.TitleIDs, image.SaveName, image.Payload, options.PS5UID)
 		if err != nil {
 			return err
 		}
 		ps5Templates[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, payloadName, ps5Templates, game.SaveImages(), time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Templates, images, time.Time{})
 	if err != nil {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := game.ConvertToPS5(options.PCDir, ps5Templates)
+	result, err := selected.Engine.ConvertToPS5(selected.Config, images, options.PCDir, ps5Templates, overrides)
 	if err != nil {
 		return err
 	}
+	warnUnusedOverrides(log, options.Allow, result.OverriddenChecks)
 	printWarnings(log, result.Warnings)
 	for saveName, data := range result.Outputs {
-		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadName), data); err != nil {
+		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadBySaveName[saveName]), data); err != nil {
 			return err
 		}
 	}
 	manifest := map[string]any{
-		"tool_version":   ToolVersion,
-		"created":        time.Now().UTC().Format(time.RFC3339),
-		"direction":      "pc-to-ps5-via-garlic",
-		"game":           profile.Key,
-		"game_name":      profile.Name,
-		"title_ids":      profile.TitleIDs,
-		"garlic":         options.GarlicURL,
-		"ps5_uid":        options.PS5UID,
-		"applied_to_ps5": options.Apply,
-		"backup_dir":     backupDir,
-		"plugin":         result.Manifest,
+		"tool_version":      ToolVersion,
+		"created":           time.Now().UTC().Format(time.RFC3339),
+		"direction":         "pc-to-ps5-via-garlic",
+		"game":              profile.Key,
+		"game_name":         profile.Name,
+		"title_ids":         profile.TitleIDs,
+		"garlic":            options.GarlicURL,
+		"ps5_uid":           options.PS5UID,
+		"applied_to_ps5":    options.Apply,
+		"backup_dir":        backupDir,
+		"overrides_allowed": options.Allow,
+		"overrides_fired":   result.OverriddenChecks,
+		"plugin":            result.Manifest,
 	}
 	if err := writeJSON(filepath.Join(options.OutputDir, "garlic_sync_manifest.json"), manifest); err != nil {
 		return err
@@ -258,6 +411,7 @@ func PCToPS5(options Options) error {
 			return fmt.Errorf("refusing to write to PS5 without --yes")
 		}
 		for saveName, data := range result.Outputs {
+			payloadName := payloadBySaveName[saveName]
 			log(fmt.Sprintf("Replacing %s %s/%s through Garlic...", profile.Name, saveName, payloadName))
 			if err := client.ReplacePayload(profile.TitleIDs, saveName, payloadName, data, options.PS5UID); err != nil {
 				return err
@@ -270,12 +424,12 @@ func PCToPS5(options Options) error {
 	return nil
 }
 
-func selectGame(options Options, client *garlic.Client) (gameapi.Profile, gameapi.Game, error) {
+func selectGame(options Options, client *garlic.Client) (games.Selected, error) {
 	var seen []string
 	if options.Game == "" && options.TitleID == "" {
 		saves, err := client.Saves()
 		if err != nil {
-			return gameapi.Profile{}, nil, err
+			return games.Selected{}, err
 		}
 		for _, save := range saves {
 			seen = append(seen, fmt.Sprint(save["title_id"]))
@@ -309,11 +463,11 @@ func SupportedGroups(gamesDir string, saves []garlic.Save) ([]map[string]any, er
 	}
 	var groups []map[string]any
 	for _, profile := range profiles {
-		game, ok := games.Registered(profile.Key)
-		if !ok {
+		eng, cfg, err := games.ResolveEngine(profile)
+		if err != nil {
 			continue
 		}
-		required := game.SaveImages()
+		required := eng.Images(cfg)
 		requiredNames := map[string]gameapi.SaveImage{}
 		for _, image := range required {
 			requiredNames[image.SaveName] = image

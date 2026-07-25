@@ -9,8 +9,10 @@ import (
 	"strings"
 
 	"savesyncpspc"
+	"savesyncpspc/internal/engine"
+	"savesyncpspc/internal/engine/larian"
+	"savesyncpspc/internal/engine/unreal"
 	"savesyncpspc/internal/gameapi"
-	"savesyncpspc/internal/games/clair"
 	"savesyncpspc/internal/util"
 )
 
@@ -22,24 +24,55 @@ func DefaultGamesDir() string {
 	return "games"
 }
 
-var registry = map[string]gameapi.Game{
-	"clair": clair.Game{},
+func init() {
+	engine.Register(unreal.New())
+	engine.Register(larian.New())
 }
 
 type metadata struct {
-	Game string          `json:"game"`
-	Name string          `json:"name"`
-	ID   string          `json:"id"`
-	IDs  json.RawMessage `json:"ids"`
+	Game         string          `json:"game"`
+	Name         string          `json:"name"`
+	ID           string          `json:"id"`
+	IDs          json.RawMessage `json:"ids"`
+	Engine       string          `json:"engine"`
+	EngineConfig json.RawMessage `json:"engine_config"`
 }
 
 type metadataID struct {
 	ID string `json:"id"`
 }
 
-func Registered(key string) (gameapi.Game, bool) {
-	game, ok := registry[key]
-	return game, ok
+// Selected bundles a resolved game profile with the engine implementation
+// and already-parsed engine_config that will do its conversion work.
+type Selected struct {
+	Profile gameapi.Profile
+	Engine  engine.Engine
+	Config  any
+}
+
+// ResolveEngine looks up profile's declared engine by name and parses its
+// engine_config against that engine. Returns an error naming the profile's
+// key if the engine is unknown or the config fails to parse, so a broken
+// or not-yet-implemented profile can be skipped by callers that enumerate
+// all profiles (e.g. SupportedGroups) rather than failing the whole batch.
+func ResolveEngine(profile gameapi.Profile) (engine.Engine, any, error) {
+	eng, ok := engine.Get(profile.Engine)
+	if !ok {
+		return nil, nil, fmt.Errorf("game %q uses unknown engine %q", profile.Key, profile.Engine)
+	}
+	cfg, err := eng.ParseConfig(profile.EngineConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("game %q: %w", profile.Key, err)
+	}
+	return eng, cfg, nil
+}
+
+func resolve(profile gameapi.Profile) (Selected, error) {
+	eng, cfg, err := ResolveEngine(profile)
+	if err != nil {
+		return Selected{}, err
+	}
+	return Selected{Profile: profile, Engine: eng, Config: cfg}, nil
 }
 
 // Profiles loads game metadata, merging the metadata embedded in the
@@ -146,7 +179,14 @@ func addProfile(profiles map[string]gameapi.Profile, source string, raw []byte) 
 	if name == "" {
 		name = key
 	}
-	profiles[key] = gameapi.Profile{Key: key, Name: name, TitleIDs: ids, MetadataPath: source}
+	profiles[key] = gameapi.Profile{
+		Key:          key,
+		Name:         name,
+		TitleIDs:     ids,
+		MetadataPath: source,
+		Engine:       meta.Engine,
+		EngineConfig: meta.EngineConfig,
+	}
 	return nil
 }
 
@@ -183,34 +223,26 @@ func upperNonEmpty(values []string) []string {
 	return out
 }
 
-func SelectProfile(gamesDir, gameKey, titleID string, seenTitleIDs []string) (gameapi.Profile, gameapi.Game, error) {
+func SelectProfile(gamesDir, gameKey, titleID string, seenTitleIDs []string) (Selected, error) {
 	profiles, err := Profiles(gamesDir)
 	if err != nil {
-		return gameapi.Profile{}, nil, err
+		return Selected{}, err
 	}
 	if gameKey != "" {
 		profile, ok := profiles[gameKey]
 		if !ok {
-			return gameapi.Profile{}, nil, fmt.Errorf("unknown game %q", gameKey)
+			return Selected{}, fmt.Errorf("unknown game %q", gameKey)
 		}
-		game, ok := Registered(profile.Key)
-		if !ok {
-			return gameapi.Profile{}, nil, fmt.Errorf("game %q is mapped but not registered in Go", profile.Key)
-		}
-		return profile, game, nil
+		return resolve(profile)
 	}
 	if titleID != "" {
 		titleID = strings.ToUpper(titleID)
 		for _, profile := range profiles {
 			if contains(profile.TitleIDs, titleID) {
-				game, ok := Registered(profile.Key)
-				if !ok {
-					return gameapi.Profile{}, nil, fmt.Errorf("game %q is mapped but not registered in Go", profile.Key)
-				}
-				return profile, game, nil
+				return resolve(profile)
 			}
 		}
-		return gameapi.Profile{}, nil, fmt.Errorf("no game metadata maps title id %s", titleID)
+		return Selected{}, fmt.Errorf("no game metadata maps title id %s", titleID)
 	}
 	seen := map[string]bool{}
 	for _, id := range seenTitleIDs {
@@ -226,16 +258,12 @@ func SelectProfile(gamesDir, gameKey, titleID string, seenTitleIDs []string) (ga
 		}
 	}
 	if len(matches) == 0 {
-		return gameapi.Profile{}, nil, fmt.Errorf("could not auto-discover a supported game from Garlic saves")
+		return Selected{}, fmt.Errorf("could not auto-discover a supported game from Garlic saves")
 	}
 	if len(matches) > 1 {
-		return gameapi.Profile{}, nil, fmt.Errorf("multiple supported games found; pass --game")
+		return Selected{}, fmt.Errorf("multiple supported games found; pass --game")
 	}
-	game, ok := Registered(matches[0].Key)
-	if !ok {
-		return gameapi.Profile{}, nil, fmt.Errorf("game %q is mapped but not registered in Go", matches[0].Key)
-	}
-	return matches[0], game, nil
+	return resolve(matches[0])
 }
 
 func contains(values []string, target string) bool {
