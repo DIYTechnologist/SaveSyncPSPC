@@ -142,12 +142,12 @@ games/<key>.json ──► profile loader (internal/games) ──► engine regi
                                                     ┌─────────┴─────────┐
                                                     ▼                   ▼
                                           internal/engine/unreal   internal/engine/larian
-                                             (GVAS, implemented)    (LSPK, not yet implemented)
+                                        (GVAS, fully implemented)  (LSPK, read path only)
 ```
 
 - `internal/engine`: the `Engine` interface (`Name`, `ParseConfig`, `OverrideTokens`, `Images`, `Compatibility`, `Inspect`, `ConvertFromPS5`, `ConvertToPS5`, `InstallOutputs`) and a name → `Engine` registry (`Register`/`Get`). `Config` is `any`: each engine parses its own `engine_config` block and type-asserts it back internally, so different engines can have completely different config shapes. Also defines the portability-gate vocabulary shared across engines: `Tier` (`TierConvertible` / `TierBlocked` / `TierWrongFormat`), `Side` (`SidePC` / `SidePS5`), `CheckResult`, and `Verdict`.
-- `internal/engine/unreal`: the only implemented engine. Generalizes what used to be `internal/games/clair`: `Config` carries the Unreal module name, the list of Garlic save images (each with its own `payload` filename — there's no single game-wide `PayloadName()` anymore), and a `class_equivalence` table of known-good `(pc class, ps5 class)` pairs per logical image.
-- `internal/engine/larian`: a stub. `"engine": "larian"` resolves to a real `Engine` and fails clearly ("not implemented yet") rather than "unknown engine" — the LSPK reader/writer for Baldur's Gate 3 hasn't been built.
+- `internal/engine/unreal`: the only fully-implemented engine (read + convert + write). Generalizes what used to be `internal/games/clair`: `Config` carries the Unreal module name, the list of Garlic save images (each with its own `payload` filename — there's no single game-wide `PayloadName()` anymore), and a `class_equivalence` table of known-good `(pc class, ps5 class)` pairs per logical image.
+- `internal/engine/larian`: read path only (LSPK container parsing + `Inspect`, see below). `"engine": "larian"` resolves to a real `Engine`; `ConvertFromPS5`/`ConvertToPS5`/`InstallOutputs` still fail clearly ("not implemented yet") since the actual conversion needs format work (LSOF, Osiris, mod-list parity) that hasn't been done.
 - `internal/gvas`: unchanged low-level GVAS binary parsing/envelope-graft library (`Parse`, `ConvertWithEnvelope`), used by `internal/engine/unreal` rather than by a game package directly.
 - `internal/games/registry.go` wires it together: `Profiles()` loads `games/*.json` (embedded defaults merged with `--games-dir` overrides, see below), and `ResolveEngine(profile)` looks up `profile.Engine` in the registry and calls its `ParseConfig(profile.EngineConfig)`. `SelectProfile(...)` returns a `Selected{Profile, Engine, Config}` bundle that `bridge.go` calls directly — there's no per-game Go code in that path at all.
 
@@ -160,7 +160,43 @@ games/<key>.json ──► profile loader (internal/games) ──► engine regi
 
 ### Adding a new engine
 
-A genuinely new save format (e.g. Larian's LSPK, once implemented) needs a new `internal/engine/<name>` package implementing `engine.Engine`, registered in `internal/games/registry.go`'s `init()`. See `internal/engine/larian` for the minimal shape of a not-yet-implemented engine.
+A genuinely new save format needs a new `internal/engine/<name>` package implementing `engine.Engine`, registered in `internal/games/registry.go`'s `init()`.
+
+## Larian (Baldur's Gate 3) - Read Path
+
+`internal/engine/larian/lspk.go` implements the LSPK save-container format: parse a real `.lsv`'s header and entry table, read a named entry's raw on-disk bytes or zlib-decompressed content, and `Repack` an unmodified archive back to bytes. This is a read path only - `ConvertFromPS5`/`ConvertToPS5`/`InstallOutputs` still return "not implemented yet". Real conversion needs an LSOF parser (`meta.lsf`), an Osiris parser (`StorySave.bin`), and mod-list parity checking against a save's Profile image (`modsettings.lsx`), none of which exist yet.
+
+**Format facts, independently confirmed against real PS5 and PC Baldur's Gate 3 saves this session** (not ported from any other tool, per the licensing note in the original design spec):
+
+- 40-byte header: `LSPK` magic, `version u32` (only `18` supported), `fileListOffset u64`, `fileListSize u32`, `flags u8`, `priority u8`, `md5[16]`, `numParts u16` (only `1` supported - refused rather than mis-parsed, since no multi-part sample exists to develop against).
+- The file list always spans to end-of-file (`fileListOffset + fileListSize == len(data)` held exactly on both real samples) - `Parse` refuses to guess if that invariant doesn't hold.
+- The file list section is `numFiles u32` + `compressedSize u32` + a **raw LZ4 block** (not the LZ4 frame format - no header/footer, just the token/literal/match sequence loop) decompressing to `numFiles * 272` bytes of fixed-size entries: `name[256]` (null-terminated), `offsetLo u32` + `offsetHi u16` (giving a 48-bit file offset), `part u8`, `flags u8` (low nibble is the compression method: `0` none, `1` zlib, `2` lz4 - every entry observed on both platforms used zlib), `sizeOnDisk u32`, `uncompressedSize u32`.
+- Go's stdlib has no LZ4 decoder, so `lz4BlockDecompress` in `lspk.go` is a from-scratch implementation of the public, well-documented raw-block algorithm (no third-party dependency added).
+- `Repack` doesn't need an LZ4 *encoder* at all for the "nothing changed" case the round-trip test proves: it re-serializes the header from its parsed fields and copies everything else (all file content, and the original file-list table's compressed bytes) through verbatim. That's byte-identical to the input by construction whenever no field actually changed - which was confirmed against both real files (8.7 MB PS5 save, 29.4 MB PC save): `Parse` → `Repack` → `bytes.Equal(repacked, original)` held exactly, for every entry's raw and decompressed content too.
+- `SaveInfo.json`'s `Platform` field is confirmed `"Prospero"` on the real PS5 save and `"Steam"` on the real PC save - exactly the string this tool would need to rewrite for a real PS5→PC conversion, matching the original design spec's claim.
+- `Inspect` currently only checks LSPK magic/version/part-count and that the four required members (`meta.lsf`, `SaveInfo.json`, `StorySave.bin`, `Globals.lsf`) are present - both real saves pass. The richer BG3-specific gate checks from the original design spec (`osiris-version`, `lsof-version`, `mod-parity`, `build-order`) need those not-yet-built LSOF/Osiris parsers.
+
+### Modifying and rebuilding archives: `WithReplacedEntry`, `Build`, and the writer requirements
+
+Once a real conversion needs to change a file's content, an LZ4 *encoder* becomes necessary for the entry table, since offsets and sizes shift. `WithReplacedEntry` patches one entry in an existing archive; `Build` assembles a brand-new archive from an arbitrary `EntrySpec` set (the tool for grafting a different save's whole file set onto a container). Three writer requirements were established the hard way - each was a silent in-game rejection until found:
+
+1. **64-byte entry alignment**: every packed entry (and the file list) is padded with `0xAD` bytes to a 64-byte boundary measured from the end of the header (matches LSLib's `PackageWriter.WritePadding`; confirmed on every real save). An unaligned but otherwise-valid archive is silently invisible to the game.
+2. **The entry table's LZ4 must actually compress**: a valid-but-literal-only LZ4 encoding (output ≥ input) was also rejected. `encodeLZ4Block` is a real greedy match-finding raw-block encoder; `encodeLZ4LiteralOnly` survives only as its small-input fallback and as a test-fixture helper.
+3. **Header `md5[16]`**: MD5 over every file's **uncompressed** content concatenated in **physical layout order**, then **every output byte incremented by 1**. The uncompressed/+1 parts come from LSLib's `PackageWriter.ComputeArchiveHash` (format facts only - no code ported, consistent with the project's stance on the `ps5-save-converter` reference tool); the physical-order part was pinned empirically, using a real game-written save's stored header MD5 as an oracle against twelve algorithm variants - exactly one matched. `MD5Recompute` is the strategy that matters; `MD5Unchanged`/`MD5Zero` remain only as experiment tooling and should be dropped when the real `ConvertFromPS5`/`ConvertToPS5` land.
+
+### Confirmed working end-to-end: PC -> PS5 graft (2026-07-25)
+
+A real 39-hour PC (Steam) save was successfully loaded on a real PS5 by rebuilding it with `Build()`: all entries from the PC `.lsv` (meta.lsf, StorySave.bin, Globals.lsf, LevelCache/*, WebP), `SaveInfo.json`'s `Platform` rewritten `"Steam"` -> `"Prospero"` (a targeted regex field rewrite preserving all other formatting), uploaded into a PS5 container under that container's existing filenames. Character/state loaded correctly in-game.
+
+**The transport rules matter as much as the file format.** Getting to that result surfaced three independent transport failures, all now understood:
+
+- **The PS5 tracks saves in an OS-level savedata database** the game queries; Garlic's raw file writes don't touch registration. Writing `sce_sys/param.sfo` into a mounted container *breaks* its registration (Garlic scrubs `param.sfo` on export - `ACCOUNT_ID` zeroed, `SAVEDATA_DIRECTORY` rewritten to Garlic's image-file name, e.g. `sdimg_Save0002` instead of the real `Save0002` - so re-importing an exported `param.sfo` mis-registers the container, producing doubled-name phantoms like `sdimg_sdimg_Save0002` and hiding the save from the game). **Rule: never write anything under `sce_sys/`; only write into containers the game itself created.**
+- **Garlic's HTTP API decodes `%20` but not `+` as a space in query strings.** Go's `url.Values.Encode()` uses `+`, so every request for a space-containing filename (all real BG3 save names) silently read/wrote a wrong, literally-`+`-named file - self-consistently across upload and download-verify, which masked it. Fixed in `garlic.Client.endpoint` (regression test in `internal/garlic/client_test.go`).
+- **Garlic zeroes `param.sfo` in mounted reads too** (`"sfo_zeroed": true` in its mount response), so container metadata can't be inspected through this transport at all.
+
+Also confirmed: Garlic's mount response and `/api/files` list a mounted container's files (name/dir/size) - useful for discovery; the save-list display name in-game comes from the OS registration (set at container creation), not from anything inside the `.lsv`, so a grafted save shows the container's original name until the game next saves into it; and loading the graft produces a **non-fatal warning** ("tampering/corruption") - plausibly because the PC save's game version (`4.1.1.3905231`) is newer than the PS5 build (`4.1.1.3877533`), the exact build-order asymmetry the original design spec flagged, though a digest stored in the OS-side `PARAMS` blob (unreachable through Garlic) hasn't been ruled out.
+
+What remains for a real `larian.Engine` conversion implementation: encode the recipe above (game-created container required, `.lsv` + `.WebP` only, existing filenames, `Platform` rewrite, `Build` with `MD5Recompute`), plus the still-unbuilt LSOF/Osiris parsers if the mod-parity and build-order gate checks from the original spec are to block bad conversions up front rather than relying on the game's own warning.
 
 ## Portability Gate (Unreal)
 

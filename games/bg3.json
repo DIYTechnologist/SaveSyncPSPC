@@ -1,0 +1,22 @@
+{
+  "game": "bg3",
+  "name": "Baldur's Gate 3",
+  "ids": [
+    {
+      "id": "PPSA18463",
+      "region": "EU"
+    }
+  ],
+  "engine": "larian",
+  "engine_config": {
+    "images": [
+      {
+        "logical": "save",
+        "label": "Save",
+        "dynamic_save_name": true,
+        "dynamic_payload": true,
+        "dynamic_pc_file": true
+      }
+    ]
+  }
+}

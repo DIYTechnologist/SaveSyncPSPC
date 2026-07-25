@@ -98,8 +98,26 @@ type Engine interface {
 	OverrideTokens() []string
 
 	// Images lists the Garlic save images this profile needs, in the
-	// order backups/conversions should process them.
+	// order backups/conversions should process them. Entries may have
+	// Dynamic* fields set (see gameapi.SaveImage) when this engine can't
+	// know a name ahead of time; callers must resolve those via
+	// ResolvePayload/ResolvePCFile (and, for DynamicSaveName, their own
+	// user-supplied override) before using an image for backup/convert.
 	Images(cfg any) []gameapi.SaveImage
+
+	// ResolvePayload determines an image's real Payload filename by
+	// inspecting mountedFileNames - the names actually present in the
+	// image's mounted Garlic container - for engines where DynamicPayload
+	// is set. For an engine with no dynamic images this is never called;
+	// implementations that don't need it should just return
+	// image.Payload unchanged.
+	ResolvePayload(cfg any, image gameapi.SaveImage, mountedFileNames []string) (string, error)
+
+	// ResolvePCFile determines an image's real PCFile name by inspecting
+	// pcDir's actual contents, for engines where DynamicPCFile is set.
+	// Implementations that don't need it should just return
+	// image.PCFile unchanged.
+	ResolvePCFile(cfg any, image gameapi.SaveImage, pcDir string) (string, error)
 
 	// Compatibility describes the PC<->PS5 relationship for display
 	// (e.g. the UI's game list), derived from cfg.
@@ -112,8 +130,15 @@ type Engine interface {
 	// ConvertFromPS5/ConvertToPS5 before any graft or write.
 	Inspect(cfg any, logical string, payload []byte, side Side, overrides map[string]bool) Verdict
 
-	ConvertFromPS5(cfg any, ps5Payloads map[string][]byte, pcDir string, overrides map[string]bool) (gameapi.ConversionResult, error)
-	ConvertToPS5(cfg any, pcDir string, ps5Templates map[string][]byte, overrides map[string]bool) (gameapi.ConversionResult, error)
+	// images is bridge.go's already-resolved image list (see
+	// gameapi.SaveImage's Dynamic* fields) - concrete SaveName/PCFile/
+	// Payload values, not the placeholders cfg alone would give an
+	// engine whose save-image identity isn't config-known ahead of time.
+	// An engine with no dynamic images (e.g. unreal) can ignore it and
+	// keep deriving everything from cfg, since the two agree by
+	// construction.
+	ConvertFromPS5(cfg any, images []gameapi.SaveImage, ps5Payloads map[string][]byte, pcDir string, overrides map[string]bool) (gameapi.ConversionResult, error)
+	ConvertToPS5(cfg any, images []gameapi.SaveImage, pcDir string, ps5Templates map[string][]byte, overrides map[string]bool) (gameapi.ConversionResult, error)
 	InstallOutputs(cfg any, outputs map[string][]byte, pcDir string, backupDir string) error
 }
 

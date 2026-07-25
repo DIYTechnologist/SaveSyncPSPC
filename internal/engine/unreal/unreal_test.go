@@ -88,7 +88,7 @@ func TestConvertFromPS5ConvertsBothFiles(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("pc-main"+cleanTail), 522))
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
 
-	result, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	result, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V7_C", []byte("ps5-main"+cleanTail), 522),
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, nil)
@@ -114,7 +114,7 @@ func TestConvertToPS5ConvertsBothPayloads(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("pc-main"+cleanTail), 522))
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
 
-	result, err := (Engine{}).ConvertToPS5(cfg, pcDir, map[string][]byte{
+	result, err := (Engine{}).ConvertToPS5(cfg, nil, pcDir, map[string][]byte{
 		"gameplay":  syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V7_C", []byte("ps5-main"+cleanTail), 522),
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, nil)
@@ -174,7 +174,7 @@ func convertGameplayOnly(t *testing.T, cfg Config, ps5Payload, pcPayload []byte,
 	pcDir := t.TempDir()
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), pcPayload)
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
-	_, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	_, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  ps5Payload,
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, overrides)
@@ -265,7 +265,7 @@ func TestGateIdentityClassMatchPassesWithoutRow(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V8_C", []byte("pc-main"+cleanTail), 522))
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
 
-	result, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	result, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  syntheticGVAS("/Script/Sandfall.BP_SaveGameObject_V7_C", []byte("ps5-main"+cleanTail), 522),
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, nil)
@@ -299,7 +299,7 @@ func TestGateMatchesRealBlueprintContentPathsBySuffix(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), pcData)
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Game/jRPGTemplate/Blueprints/SaveObjects/BP_jRPG_SavesContainer.BP_jRPG_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
 
-	result, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	result, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  ps5Data,
 		"container": syntheticGVAS("/Game/jRPGTemplate/Blueprints/SaveObjects/BP_jRPG_SavesContainer.BP_jRPG_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, nil)
@@ -333,7 +333,7 @@ func TestGateCandidateClassPairWarnsWithoutBlocking(t *testing.T) {
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), pcData)
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
 
-	result, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	result, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  ps5Data,
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, nil)
@@ -372,7 +372,7 @@ func TestGateAllowOverridesOnlyTheNamedCheck(t *testing.T) {
 	pcDir := t.TempDir()
 	mustWrite(t, filepath.Join(pcDir, "EXPEDITION_0.sav"), pcData)
 	mustWrite(t, filepath.Join(pcDir, "SavesContainer.sav"), syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("pc-menu"+cleanTail), 522))
-	result, err := (Engine{}).ConvertFromPS5(cfg, map[string][]byte{
+	result, err := (Engine{}).ConvertFromPS5(cfg, nil, map[string][]byte{
 		"gameplay":  ps5Data,
 		"container": syntheticGVAS("/Script/Sandfall.BP_SavesContainer_C", []byte("ps5-menu"+cleanTail), 522),
 	}, pcDir, map[string]bool{CheckClassMap: true, CheckAccountID: true})

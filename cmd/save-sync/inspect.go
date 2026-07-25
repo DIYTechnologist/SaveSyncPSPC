@@ -99,6 +99,9 @@ func inspectGarlic(garlicURL string, timeout time.Duration, ps5UID, gamesDir, ga
 
 	allPortable := true
 	for _, image := range images {
+		if image.DynamicSaveName || image.DynamicPayload {
+			return fmt.Errorf("%s: `inspect` doesn't support engines with dynamic save images yet (engine %q); use ps5-to-pc/pc-to-ps5 with --ps5-save-name instead", image.Logical, selected.Engine.Name())
+		}
 		ps5Data, err := client.FetchPayload(selected.Profile.TitleIDs, image.SaveName, image.Payload, ps5UID)
 		if err != nil {
 			return fmt.Errorf("%s: %w", image.Logical, err)

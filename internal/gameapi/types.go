@@ -25,6 +25,29 @@ type SaveImage struct {
 	// since different logical images of the same game - or a different
 	// engine entirely - may use different payload filenames.
 	Payload string `json:"payload"`
+
+	// The Dynamic* fields exist for engines (e.g. Baldur's Gate 3) whose
+	// save-image identity isn't a fixed convention the way Clair's is:
+	// there's no single "sdimg_EXPEDITION0"-equivalent constant, because
+	// each save slot and each save file is named per-instance. When a
+	// Dynamic* flag is set, the corresponding field above is a
+	// placeholder (typically "") and the real value must be resolved at
+	// runtime - see engine.Engine's ResolvePayload/ResolvePCFile and
+	// bridge.go's resolution pass, which runs before any backup or
+	// conversion step.
+
+	// DynamicSaveName means SaveName must be supplied by the caller
+	// (--ps5-save-name) rather than read from this struct - there's no
+	// way to infer which PS5 save slot the user means.
+	DynamicSaveName bool `json:"dynamic_save_name"`
+	// DynamicPayload means Payload must be discovered by listing the
+	// mounted Garlic save image's actual files (engine.ResolvePayload)
+	// rather than assumed from config.
+	DynamicPayload bool `json:"dynamic_payload"`
+	// DynamicPCFile means PCFile must be discovered by inspecting the PC
+	// save directory's actual contents (engine.ResolvePCFile) rather
+	// than assumed from config.
+	DynamicPCFile bool `json:"dynamic_pc_file"`
 }
 
 type ConversionResult struct {

@@ -43,7 +43,14 @@ func (c *Client) endpoint(path string, query map[string]string) string {
 	for key, value := range query {
 		values.Set(key, value)
 	}
-	return u + "?" + values.Encode()
+	// Garlic's server decodes %20 as a space but treats + literally, so
+	// url.Values.Encode()'s form-style +-for-space encoding silently
+	// reads/writes the wrong filename for any save file with a space in
+	// its name (e.g. BG3's "A Nautiloid in Hell - 0h 00m.lsv"; Clair's
+	// space-free payload name never tripped this). Confirmed against a
+	// real Garlic server: name=A+Nautiloid... returns "File not found"
+	// for a file that exists, name=A%20Nautiloid... succeeds.
+	return u + "?" + strings.ReplaceAll(values.Encode(), "+", "%20")
 }
 
 func (c *Client) RequestBytes(method, path string, query map[string]string, data []byte) ([]byte, string, error) {
@@ -134,9 +141,65 @@ func (c *Client) Users() ([]User, error) {
 	return users, nil
 }
 
-func (c *Client) Mount(idx int) error {
-	_, err := c.RequestJSON(http.MethodGet, "/api/mount", map[string]string{"idx": strconv.Itoa(idx)}, nil)
-	return err
+// MountedFile is one entry from Garlic's mount response file listing -
+// confirmed live: mounting returns {"files":[{"name":...,"dir":bool,
+// "size":int}, ...]} describing everything in the mounted save image.
+// This is what lets a caller discover a save's actual filenames (e.g.
+// Baldur's Gate 3's per-save .lsv name) rather than assuming a fixed
+// convention.
+type MountedFile struct {
+	Name string `json:"name"`
+	Dir  bool   `json:"dir"`
+	Size int64  `json:"size"`
+}
+
+// Mount mounts the save image at idx and returns its file listing.
+func (c *Client) Mount(idx int) ([]MountedFile, error) {
+	data, err := c.RequestJSON(http.MethodGet, "/api/mount", map[string]string{"idx": strconv.Itoa(idx)}, nil)
+	if err != nil {
+		return nil, err
+	}
+	raw, ok := data["files"].([]any)
+	if !ok {
+		return nil, nil
+	}
+	files := make([]MountedFile, 0, len(raw))
+	for _, item := range raw {
+		obj, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		files = append(files, MountedFile{
+			Name: fmt.Sprint(obj["name"]),
+			Dir:  util.BoolValue(obj["dir"], false),
+			Size: int64(toFloat(obj["size"])),
+		})
+	}
+	return files, nil
+}
+
+func toFloat(v any) float64 {
+	f, _ := v.(float64)
+	return f
+}
+
+// MountByName finds the save image matching titleIDs/saveName/uid (see
+// FindSaveIndex) and mounts it, returning the mounted index and its file
+// listing. Unlike FetchPayload/ReplacePayload, it does not unmount when
+// it returns - the caller is expected to inspect the file listing (e.g.
+// to resolve a dynamic payload filename) and then explicitly Unmount
+// once done, since what to download/upload isn't known until after
+// seeing what's actually in the image.
+func (c *Client) MountByName(titleIDs []string, saveName, uid string) (idx int, files []MountedFile, err error) {
+	idx, err = c.FindSaveIndex(titleIDs, saveName, uid)
+	if err != nil {
+		return 0, nil, err
+	}
+	files, err = c.Mount(idx)
+	if err != nil {
+		return 0, nil, err
+	}
+	return idx, files, nil
 }
 
 func (c *Client) Unmount() error {
@@ -219,7 +282,7 @@ func (c *Client) FetchPayload(titleIDs []string, saveName, payloadName, uid stri
 	if err != nil {
 		return nil, err
 	}
-	if err := c.Mount(idx); err != nil {
+	if _, err := c.Mount(idx); err != nil {
 		return nil, err
 	}
 	defer c.Unmount()
@@ -231,7 +294,7 @@ func (c *Client) ReplacePayload(titleIDs []string, saveName, payloadName string,
 	if err != nil {
 		return err
 	}
-	if err := c.Mount(idx); err != nil {
+	if _, err := c.Mount(idx); err != nil {
 		return err
 	}
 	defer c.Unmount()

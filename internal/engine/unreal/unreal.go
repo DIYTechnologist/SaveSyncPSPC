@@ -110,6 +110,18 @@ func (Engine) Images(cfgAny any) []gameapi.SaveImage {
 	return out
 }
 
+// ResolvePayload and ResolvePCFile are no-ops for Unreal: every image's
+// name is a fixed, known-ahead-of-time value from engine_config (no
+// Dynamic* flag is ever set on an image this engine produces), so
+// there's never anything to discover at runtime.
+func (Engine) ResolvePayload(_ any, image gameapi.SaveImage, _ []string) (string, error) {
+	return image.Payload, nil
+}
+
+func (Engine) ResolvePCFile(_ any, image gameapi.SaveImage, _ string) (string, error) {
+	return image.PCFile, nil
+}
+
 var versionSuffix = regexp.MustCompile(`_V(\d+)_`)
 
 // Compatibility derives a display-friendly PC<->PS5 summary from the
@@ -257,7 +269,10 @@ func validatePCDir(pcDir string, images []ImageConfig) error {
 	return nil
 }
 
-func (e Engine) ConvertFromPS5(cfgAny any, ps5Payloads map[string][]byte, pcDir string, overrides map[string]bool) (gameapi.ConversionResult, error) {
+// images is ignored: every unreal image's SaveName/PCFile/Payload is
+// already fully known from cfg (no Dynamic* field is ever set on an
+// image this engine produces), so it agrees with images by construction.
+func (e Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads map[string][]byte, pcDir string, overrides map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if err := validatePCDir(pcDir, cfg.Images); err != nil {
 		return gameapi.ConversionResult{}, err
@@ -315,7 +330,8 @@ func (e Engine) ConvertFromPS5(cfgAny any, ps5Payloads map[string][]byte, pcDir 
 	return gameapi.ConversionResult{Outputs: outputs, Manifest: manifest, Warnings: warnings, OverriddenChecks: overriddenCheckNames(allChecks)}, nil
 }
 
-func (e Engine) ConvertToPS5(cfgAny any, pcDir string, ps5Templates map[string][]byte, overrides map[string]bool) (gameapi.ConversionResult, error) {
+// images is ignored - see the note on ConvertFromPS5.
+func (e Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string, ps5Templates map[string][]byte, overrides map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if err := validatePCDir(pcDir, cfg.Images); err != nil {
 		return gameapi.ConversionResult{}, err

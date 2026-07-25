@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
@@ -18,19 +19,26 @@ import (
 const ToolVersion = "0.2.0"
 
 type Options struct {
-	GarlicURL  string
-	Timeout    time.Duration
-	PS5UID     string
-	GamesDir   string
-	Game       string
-	TitleID    string
-	BackupRoot string
-	PCDir      string
-	OutputDir  string
-	Force      bool
-	Install    bool
-	Apply      bool
-	Yes        bool
+	GarlicURL string
+	Timeout   time.Duration
+	PS5UID    string
+	// PS5SaveName selects which Garlic save_name to target for a game
+	// whose save slots aren't a fixed, config-known constant (e.g.
+	// Baldur's Gate 3's sdimg_Save0001/sdimg_Save0002/...). Required
+	// whenever the selected engine's Images() returns an image with
+	// DynamicSaveName set; ignored otherwise (Clair's SaveName is always
+	// config-known, so this is a no-op for it).
+	PS5SaveName string
+	GamesDir    string
+	Game        string
+	TitleID     string
+	BackupRoot  string
+	PCDir       string
+	OutputDir   string
+	Force       bool
+	Install     bool
+	Apply       bool
+	Yes         bool
 	// Allow names portability-gate checks to bypass for this run (see
 	// engine.CheckResult / the unreal engine's gate.go). Unknown tokens
 	// are a hard error. For pc-to-ps5, any non-empty Allow requires Apply
@@ -202,6 +210,59 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 	return backupDir, nil
 }
 
+// resolveDynamicImages fills in any SaveName/Payload/PCFile fields the
+// engine couldn't know ahead of time (see gameapi.SaveImage's Dynamic*
+// fields), returning a fully-concrete copy of images. This runs before
+// any backup or conversion step, since those need real filenames -
+// there's no static config for a save whose slot and filenames are
+// per-instance (e.g. Baldur's Gate 3).
+//
+// PCFile resolution (discovering an existing local file to read) only
+// runs for direction "pc-to-ps5", where the PC side is the conversion
+// source. For "ps5-to-pc" the PC-side file doesn't exist yet - it's an
+// output the engine names itself (typically from the resolved Payload),
+// not something to discover.
+func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName, direction string) ([]gameapi.SaveImage, error) {
+	resolved := make([]gameapi.SaveImage, len(images))
+	for i, image := range images {
+		if image.DynamicSaveName {
+			if ps5SaveName == "" {
+				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
+			}
+			image.SaveName = ps5SaveName
+		}
+		if image.DynamicPCFile && direction == "pc-to-ps5" {
+			pcFile, err := eng.ResolvePCFile(cfg, image, pcDir)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.PCFile = pcFile
+		}
+		if image.DynamicPayload {
+			_, files, err := client.MountByName(titleIDs, image.SaveName, ps5UID)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			names := make([]string, 0, len(files))
+			for _, f := range files {
+				if !f.Dir {
+					names = append(names, f.Name)
+				}
+			}
+			payload, resolveErr := eng.ResolvePayload(cfg, image, names)
+			if unmountErr := client.Unmount(); unmountErr != nil && resolveErr == nil {
+				resolveErr = fmt.Errorf("unmount: %w", unmountErr)
+			}
+			if resolveErr != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, resolveErr)
+			}
+			image.Payload = payload
+		}
+		resolved[i] = image
+	}
+	return resolved, nil
+}
+
 func PS5ToPC(options Options) error {
 	log := options.logger()
 	client := garlic.New(options.GarlicURL, options.Timeout)
@@ -217,7 +278,10 @@ func PS5ToPC(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images := selected.Engine.Images(selected.Config)
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "ps5-to-pc")
+	if err != nil {
+		return err
+	}
 	ps5Payloads := map[string][]byte{}
 	for _, image := range images {
 		log(fmt.Sprintf("Pulling %s %s/%s from Garlic...", profile.Name, image.SaveName, image.Payload))
@@ -232,7 +296,7 @@ func PS5ToPC(options Options) error {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := selected.Engine.ConvertFromPS5(selected.Config, ps5Payloads, options.PCDir, overrides)
+	result, err := selected.Engine.ConvertFromPS5(selected.Config, images, ps5Payloads, options.PCDir, overrides)
 	if err != nil {
 		return err
 	}
@@ -292,7 +356,10 @@ func PCToPS5(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images := selected.Engine.Images(selected.Config)
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "pc-to-ps5")
+	if err != nil {
+		return err
+	}
 	payloadBySaveName := map[string]string{}
 	ps5Templates := map[string][]byte{}
 	for _, image := range images {
@@ -309,7 +376,7 @@ func PCToPS5(options Options) error {
 		return err
 	}
 	log("Backed up current PC and PS5 saves to: " + backupDir)
-	result, err := selected.Engine.ConvertToPS5(selected.Config, options.PCDir, ps5Templates, overrides)
+	result, err := selected.Engine.ConvertToPS5(selected.Config, images, options.PCDir, ps5Templates, overrides)
 	if err != nil {
 		return err
 	}
