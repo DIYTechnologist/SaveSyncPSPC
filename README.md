@@ -4,6 +4,12 @@ PC-side save bridge for moving supported game saves between Garlic Save Manager 
 
 The service discovers supported saves from Garlic, groups the save images that belong together, runs a game-specific conversion plugin, and can write the converted payloads back through Garlic. Garlic still owns the PS5 side of the process: mounting, decrypting, uploading payloads, and re-encrypting saves.
 
+# Licensing
+
+- Personal use - AGPL
+- Commercial use - Contact for a License
+- AI Model Training  - Contact for a License
+
 ## Current Support
 
 See [docs/supported_games.md](docs/supported_games.md) for supported games and platform compatibility.
