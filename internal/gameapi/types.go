@@ -69,4 +69,19 @@ type Profile struct {
 	MetadataPath string          `json:"metadata_path"`
 	Engine       string          `json:"engine"`
 	EngineConfig json.RawMessage `json:"engine_config"`
+
+	// PCSaveDirs maps a Go GOOS value ("windows", "linux", "darwin") to a
+	// template path for where this game's PC saves normally live, for
+	// suggesting a starting point to browse from (see internal/pcpath).
+	// Supported placeholders: %LOCALAPPDATA%, %APPDATA%, %USERPROFILE%
+	// (expanded from the current process's environment - meaningful only
+	// when actually running on that OS) and a leading ~ for the home
+	// directory. Optional; a game with no entry for the current OS simply
+	// has no suggestion, the user can still type a path manually.
+	PCSaveDirs map[string]string `json:"pc_save_dirs,omitempty"`
+	// SteamAppID, if set, lets internal/pcpath also suggest Steam Play
+	// (Proton) compatdata locations on Linux by reusing the "windows"
+	// entry's path suffix under each guessed Steam library's
+	// steamapps/compatdata/<id>/pfx/drive_c/users/steamuser/AppData/Local.
+	SteamAppID string `json:"steam_app_id,omitempty"`
 }

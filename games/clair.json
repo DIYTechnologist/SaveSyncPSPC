@@ -7,6 +7,10 @@
       "region": "EU"
     }
   ],
+  "pc_save_dirs": {
+    "windows": "%LOCALAPPDATA%\\Sandfall\\Saved\\SaveGames"
+  },
+  "steam_app_id": "1903340",
   "engine": "unreal",
   "engine_config": {
     "module": "",

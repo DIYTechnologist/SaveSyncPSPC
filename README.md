@@ -14,7 +14,7 @@ The service discovers supported saves from Garlic, groups the save images that b
 
 See [docs/supported_games.md](docs/supported_games.md) for supported games and platform compatibility.
 See [docs/games/clair.md](docs/games/clair.md) for Clair-specific save names, compatibility notes, and workflow details.
-See [docs/dev.mnd](docs/dev.mnd) for development, release, and new-game implementation notes.
+See [docs/dev.md](docs/dev.md) for development, release, and new-game implementation notes.
 
 ## Requirements
 
@@ -166,6 +166,26 @@ Apply converted payloads back to PS5 through Garlic:
   --force
 ```
 
+### Baldur's Gate 3 (dynamic save slot)
+
+BG3 saves have no fixed filenames — pass `--ps5-save-name` naming the Garlic `sdimg_SaveNNNN` slot to target (check Garlic's save list for the one you want):
+
+```sh
+./bin/save-sync \
+  --garlic http://192.168.2.67:8082 \
+  --game bg3 \
+  --ps5-uid 1ea2f4d9 \
+  --ps5-save-name sdimg_Save0002 \
+  pc-to-ps5 \
+  --pc-dir "./SaveGames/Ruined Battlefield - 39h 05m" \
+  --output-dir ./converted_for_ps5 \
+  --apply \
+  --yes \
+  --force
+```
+
+`--pc-dir` should point at the folder containing that save's single `.lsv` (and its matching `.WebP`), same as a real Steam BG3 save folder. `save-sync inspect` doesn't support BG3 yet (dynamic-image engines aren't wired into it) — errors clearly rather than doing something misleading.
+
 ## Docker
 
 Build the image:
@@ -235,7 +255,7 @@ save-sync-ps-pc-checksums.txt
 
 ## Game Discovery
 
-Supported games are described entirely by metadata under `games/` — a game is a JSON profile naming a save-format *engine* (`internal/engine/unreal` for Unreal's GVAS format, fully implemented; `internal/engine/larian` for Baldur's Gate 3's LSPK format, read/inspect only so far - conversion isn't implemented yet) plus that engine's config, not a per-game Go plugin. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
+Supported games are described entirely by metadata under `games/` — a game is a JSON profile naming a save-format *engine* (`internal/engine/unreal` for Unreal's GVAS format; `internal/engine/larian` for Baldur's Gate 3's LSPK format) plus that engine's config, not a per-game Go plugin. Both engines support full read/convert/write conversion. Unlike Unreal titles, BG3 has no fixed, config-known save filenames (slot, `.lsv` name), so its profile (`games/bg3.json`) marks its image as dynamic and conversion runs need `--ps5-save-name` to say which Garlic save slot to target — see "Dynamic image resolution" in `docs/dev.md`. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
 
 The metadata maps one or more PS5 title IDs to a stable game key, and declares its engine:
 
