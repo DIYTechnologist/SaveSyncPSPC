@@ -142,14 +142,28 @@ games/<key>.json ──► profile loader (internal/games) ──► engine regi
                                                     ┌─────────┴─────────┐
                                                     ▼                   ▼
                                           internal/engine/unreal   internal/engine/larian
-                                        (GVAS, fully implemented)  (LSPK, read path only)
+                                        (GVAS, fully implemented)  (LSPK, fully implemented)
 ```
 
-- `internal/engine`: the `Engine` interface (`Name`, `ParseConfig`, `OverrideTokens`, `Images`, `Compatibility`, `Inspect`, `ConvertFromPS5`, `ConvertToPS5`, `InstallOutputs`) and a name → `Engine` registry (`Register`/`Get`). `Config` is `any`: each engine parses its own `engine_config` block and type-asserts it back internally, so different engines can have completely different config shapes. Also defines the portability-gate vocabulary shared across engines: `Tier` (`TierConvertible` / `TierBlocked` / `TierWrongFormat`), `Side` (`SidePC` / `SidePS5`), `CheckResult`, and `Verdict`.
-- `internal/engine/unreal`: the only fully-implemented engine (read + convert + write). Generalizes what used to be `internal/games/clair`: `Config` carries the Unreal module name, the list of Garlic save images (each with its own `payload` filename — there's no single game-wide `PayloadName()` anymore), and a `class_equivalence` table of known-good `(pc class, ps5 class)` pairs per logical image.
-- `internal/engine/larian`: read path only (LSPK container parsing + `Inspect`, see below). `"engine": "larian"` resolves to a real `Engine`; `ConvertFromPS5`/`ConvertToPS5`/`InstallOutputs` still fail clearly ("not implemented yet") since the actual conversion needs format work (LSOF, Osiris, mod-list parity) that hasn't been done.
+- `internal/engine`: the `Engine` interface (`Name`, `ParseConfig`, `OverrideTokens`, `Images`, `Compatibility`, `Inspect`, `ResolvePayload`, `ResolvePCFile`, `ConvertFromPS5`, `ConvertToPS5`, `InstallOutputs`) and a name → `Engine` registry (`Register`/`Get`). `Config` is `any`: each engine parses its own `engine_config` block and type-asserts it back internally, so different engines can have completely different config shapes. Also defines the portability-gate vocabulary shared across engines: `Tier` (`TierConvertible` / `TierBlocked` / `TierWrongFormat`), `Side` (`SidePC` / `SidePS5`), `CheckResult`, and `Verdict`.
+- `internal/engine/unreal`: the first fully-implemented engine (read + convert + write). Generalizes what used to be `internal/games/clair`: `Config` carries the Unreal module name, the list of Garlic save images (each with its own `payload` filename — there's no single game-wide `PayloadName()` anymore), and a `class_equivalence` table of known-good `(pc class, ps5 class)` pairs per logical image. Every field on its images is config-known/static, so `ResolvePayload`/`ResolvePCFile` are trivial passthroughs it never actually needs.
+- `internal/engine/larian`: the second fully-implemented engine (LSPK container parsing/rebuilding + `Inspect` + `ConvertToPS5`/`ConvertFromPS5`, see below). Unlike Clair, none of a BG3 image's filenames are config-known — see "Dynamic image resolution" below for how that's handled generically rather than as a one-off hack.
 - `internal/gvas`: unchanged low-level GVAS binary parsing/envelope-graft library (`Parse`, `ConvertWithEnvelope`), used by `internal/engine/unreal` rather than by a game package directly.
 - `internal/games/registry.go` wires it together: `Profiles()` loads `games/*.json` (embedded defaults merged with `--games-dir` overrides, see below), and `ResolveEngine(profile)` looks up `profile.Engine` in the registry and calls its `ParseConfig(profile.EngineConfig)`. `SelectProfile(...)` returns a `Selected{Profile, Engine, Config}` bundle that `bridge.go` calls directly — there's no per-game Go code in that path at all.
+
+### Dynamic image resolution (games with no fixed filenames)
+
+Clair's `gameapi.SaveImage` fields (`SaveName`, `Payload`, `PCFile`) are all config-known constants from `games/clair.json`. Baldur's Gate 3 has none of that: the PS5 save slot is whichever of Garlic's `sdimg_Save0001`/`sdimg_Save0002`/... you picked in-game, the `.lsv` filename inside that slot is the save's own display name (`A Nautiloid in Hell - 0h 00m.lsv`, `Ruined Battlefield - 39h 05m.lsv`, ...), and the PC-side filename is the same story on Steam's save folder. None of that can live in a JSON profile.
+
+`gameapi.SaveImage` has three `Dynamic*` booleans (`DynamicSaveName`, `DynamicPayload`, `DynamicPCFile`) an engine sets on an image (`games/bg3.json` sets all three) to mark which fields must be resolved at runtime instead of read from config. Resolution itself is generic, not BG3-specific:
+
+- `bridge.go`'s `resolveDynamicImages` runs once, before any backup or conversion step, for both `PS5ToPC` and `PCToPS5`. For each image:
+  - `DynamicSaveName` — filled from the new `--ps5-save-name` CLI flag (`bridge.Options.PS5SaveName`). There's no way to discover "which save slot did you mean" from Garlic alone, so this one requires the user to say so explicitly; a missing flag on a dynamic-save-name image is a clear error naming the image and telling you to check Garlic's save list.
+  - `DynamicPayload` — resolved by mounting the now-known save slot via the new `garlic.Client.MountByName` (mount, list files, always unmount again even on error) and calling the engine's `Engine.ResolvePayload(cfg, image, mountedFileNames)`. Larian's implementation finds the single `.lsv` among the mounted files (errors if zero or more than one).
+  - `DynamicPCFile` — resolved by calling `Engine.ResolvePCFile(cfg, image, pcDir)`, only for `pc-to-ps5` (the PC side is the conversion source there; for `ps5-to-pc` the PC file doesn't exist yet, it's an output the engine names itself). Larian's implementation finds the single `.lsv` in the PC save directory.
+- `engine.Engine` grew `ResolvePayload`/`ResolvePCFile` methods to support this. Unreal's implementations are no-op passthroughs since none of its fields are ever dynamic.
+
+This is why `save-sync inspect` explicitly refuses `DynamicSaveName`/`DynamicPayload` images today (`cmd/save-sync/inspect.go`) rather than silently doing nothing useful — inspecting a save with no fixed identity needs the same `--ps5-save-name`-driven resolution pass `pc-to-ps5`/`ps5-to-pc` do, which hasn't been wired into `inspect` yet.
 
 ### Adding a new Unreal game
 
@@ -162,9 +176,9 @@ games/<key>.json ──► profile loader (internal/games) ──► engine regi
 
 A genuinely new save format needs a new `internal/engine/<name>` package implementing `engine.Engine`, registered in `internal/games/registry.go`'s `init()`.
 
-## Larian (Baldur's Gate 3) - Read Path
+## Larian (Baldur's Gate 3)
 
-`internal/engine/larian/lspk.go` implements the LSPK save-container format: parse a real `.lsv`'s header and entry table, read a named entry's raw on-disk bytes or zlib-decompressed content, and `Repack` an unmodified archive back to bytes. This is a read path only - `ConvertFromPS5`/`ConvertToPS5`/`InstallOutputs` still return "not implemented yet". Real conversion needs an LSOF parser (`meta.lsf`), an Osiris parser (`StorySave.bin`), and mod-list parity checking against a save's Profile image (`modsettings.lsx`), none of which exist yet.
+`internal/engine/larian/lspk.go` implements the LSPK save-container format: parse a real `.lsv`'s header and entry table, read a named entry's raw on-disk bytes or zlib-decompressed content, `Repack` an unmodified archive back to bytes, and (see below) rebuild a modified one. `internal/engine/larian/larian.go` wires this into a full `engine.Engine`: `Inspect`, dynamic filename resolution (`ResolvePayload`/`ResolvePCFile`, see "Dynamic image resolution" above), and `ConvertToPS5`/`ConvertFromPS5`/`InstallOutputs`, all of which do real work now rather than returning "not implemented yet". What's still missing: an LSOF parser (`meta.lsf`), an Osiris parser (`StorySave.bin`), and mod-list parity checking against a save's Profile image (`modsettings.lsx`) — needed for the richer gate checks (`osiris-version`, `lsof-version`, `mod-parity`, `build-order`) from the original design spec, not for the graft itself.
 
 **Format facts, independently confirmed against real PS5 and PC Baldur's Gate 3 saves this session** (not ported from any other tool, per the licensing note in the original design spec):
 
@@ -196,7 +210,17 @@ A real 39-hour PC (Steam) save was successfully loaded on a real PS5 by rebuildi
 
 Also confirmed: Garlic's mount response and `/api/files` list a mounted container's files (name/dir/size) - useful for discovery; the save-list display name in-game comes from the OS registration (set at container creation), not from anything inside the `.lsv`, so a grafted save shows the container's original name until the game next saves into it; and loading the graft produces a **non-fatal warning** ("tampering/corruption") - plausibly because the PC save's game version (`4.1.1.3905231`) is newer than the PS5 build (`4.1.1.3877533`), the exact build-order asymmetry the original design spec flagged, though a digest stored in the OS-side `PARAMS` blob (unreachable through Garlic) hasn't been ruled out.
 
-What remains for a real `larian.Engine` conversion implementation: encode the recipe above (game-created container required, `.lsv` + `.WebP` only, existing filenames, `Platform` rewrite, `Build` with `MD5Recompute`), plus the still-unbuilt LSOF/Osiris parsers if the mod-parity and build-order gate checks from the original spec are to block bad conversions up front rather than relying on the game's own warning.
+### Wired into `larian.Engine` and the CLI (2026-07-25)
+
+The manual recipe above is now `larian.Engine.ConvertToPS5`/`ConvertFromPS5` (`rebuildWithPlatform` in `internal/engine/larian/larian.go`): parse → decompress every entry → rewrite `SaveInfo.json`'s `Platform` field via a targeted regex (preserves BG3's own formatting, not a JSON re-marshal) → `Build` with `MD5Recompute`. `games/bg3.json` declares the `bg3` profile (title ID `PPSA18463`, engine `larian`, one image with all three `Dynamic*` flags set), so `save-sync --game bg3 --ps5-save-name sdimg_SaveNNNN pc-to-ps5/ps5-to-pc` now runs the same path as `clair` end-to-end: dynamic resolution (mount, discover the real `.lsv` filenames) → backup → convert → (with `--apply --yes`) upload through Garlic, using the exact same `garlic.Client.ReplacePayload` transport already proven for Clair (now also carrying the `%20` encoding fix).
+
+This was verified two ways:
+- **The underlying graft mechanism** (`Build`, 64-byte alignment, real LZ4, physical-order MD5, `Platform` rewrite, `sce_sys/`-untouched upload) was confirmed working in-game via the manual recipe above: a real 39-hour PC save loaded correctly on a real PS5 with the right character/state.
+- **The generic CLI wiring itself** (`--ps5-save-name`, `resolveDynamicImages`, `ResolvePayload`/`ResolvePCFile`, `bridge.PCToPS5`) was run for real against the same PS5 and Garlic instance — `save-sync --garlic ... --game bg3 --ps5-save-name sdimg_Save0002 pc-to-ps5 --pc-dir ... --apply --yes` — with no manual probe scripts involved. It correctly discovered the PS5 save's actual `.lsv` filename via mount+list, produced a manifest with the right party/level data and `"Platform" : "Prospero"`, and `ReplacePayload` succeeded without error. This exercises the identical graft mechanism already confirmed above, but the CLI-driven upload itself hasn't had a separate in-game load check yet — that's the next thing to confirm before calling the CLI path fully proven end-to-end.
+
+`ConvertFromPS5` (PS5 -> PC, `Platform` `"Prospero"` -> `"Steam"`) uses the same mechanism in the opposite direction but has not been field-tested at all yet, manually or via the CLI.
+
+Known gaps in the current wiring: only one save image per BG3 profile is supported (`ConvertToPS5`/`ConvertFromPS5` both error on `len(images) != 1`); the `.WebP` thumbnail and the OS-level save-list display name/art aren't updated by a graft, so the save list may show stale text/art until the game next saves into that slot (noted in the conversion manifest); and `save-sync inspect` doesn't support dynamic-image engines yet (see "Dynamic image resolution" above).
 
 ## Portability Gate (Unreal)
 

@@ -30,12 +30,14 @@ func init() {
 }
 
 type metadata struct {
-	Game         string          `json:"game"`
-	Name         string          `json:"name"`
-	ID           string          `json:"id"`
-	IDs          json.RawMessage `json:"ids"`
-	Engine       string          `json:"engine"`
-	EngineConfig json.RawMessage `json:"engine_config"`
+	Game         string            `json:"game"`
+	Name         string            `json:"name"`
+	ID           string            `json:"id"`
+	IDs          json.RawMessage   `json:"ids"`
+	Engine       string            `json:"engine"`
+	EngineConfig json.RawMessage   `json:"engine_config"`
+	PCSaveDirs   map[string]string `json:"pc_save_dirs"`
+	SteamAppID   string            `json:"steam_app_id"`
 }
 
 type metadataID struct {
@@ -186,6 +188,8 @@ func addProfile(profiles map[string]gameapi.Profile, source string, raw []byte) 
 		MetadataPath: source,
 		Engine:       meta.Engine,
 		EngineConfig: meta.EngineConfig,
+		PCSaveDirs:   meta.PCSaveDirs,
+		SteamAppID:   meta.SteamAppID,
 	}
 	return nil
 }
