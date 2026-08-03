@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"savesyncpspc/internal/ludusavi"
 )
 
 // Candidate is one suggested PC save directory.
@@ -25,6 +27,12 @@ type Candidate struct {
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
 	Exists bool   `json:"exists"`
+	// Truncated means Path stops short of the actual save file(s) -
+	// ludusavi's template named a further placeholder (typically a
+	// per-account ID) or a glob this package has no way to resolve, so
+	// Path is the last fully-resolved ancestor directory instead of a
+	// guess. The user picks the rest by browsing.
+	Truncated bool `json:"truncated"`
 }
 
 // Suggest returns candidate PC save directories for the OS this process
@@ -53,6 +61,44 @@ func Suggest(pcSaveDirs map[string]string, steamAppID string) []Candidate {
 		}
 	}
 
+	return out
+}
+
+// SuggestWithManifest is Suggest, additionally merged with candidates
+// pulled from a ludusavi-manifest lookup for gameName (see
+// internal/ludusavi) - a large, crowd-sourced, frequently-updated data
+// source that covers far more games/platforms than any one game's
+// hand-authored pc_save_dirs ever will. manifest may be nil (e.g. the
+// fetch/parse failed, likely offline) - callers should treat that as
+// "no ludusavi data available this time", not an error: everything
+// pcSaveDirs/steamAppID already provide is still returned. If the
+// profile doesn't set steamAppID but ludusavi knows one for gameName,
+// that's used instead so Steam Play (Proton) compatdata guessing (see
+// Suggest) still works. Candidates are de-duplicated by cleaned path,
+// preferring whichever source produced a given path first.
+func SuggestWithManifest(pcSaveDirs map[string]string, steamAppID string, manifest *ludusavi.Manifest, gameName string) []Candidate {
+	effectiveSteamID := steamAppID
+	if effectiveSteamID == "" && manifest != nil && gameName != "" {
+		if id, ok := manifest.SteamAppID(gameName); ok {
+			effectiveSteamID = id
+		}
+	}
+	out := Suggest(pcSaveDirs, effectiveSteamID)
+	if manifest == nil || gameName == "" {
+		return out
+	}
+	seen := map[string]bool{}
+	for _, c := range out {
+		seen[filepath.Clean(c.Path)] = true
+	}
+	for _, lc := range manifest.Suggest(gameName, runtime.GOOS) {
+		p := filepath.Clean(lc.Path)
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, Candidate{Path: p, Reason: lc.Reason, Exists: lc.Exists, Truncated: lc.Truncated})
+	}
 	return out
 }
 

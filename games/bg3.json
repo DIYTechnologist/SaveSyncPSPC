@@ -9,7 +9,8 @@
   ],
   "pc_save_dirs": {
     "windows": "%LOCALAPPDATA%\\Larian Studios\\Baldur's Gate 3\\PlayerProfiles\\Public\\SaveGames\\Story",
-    "darwin": "~/Library/Application Support/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/SaveGames/Story"
+    "darwin": "~/Documents/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story",
+    "linux": "~/.local/share/Larian Studios/Baldur's Gate 3/PlayerProfiles/Public/Savegames/Story"
   },
   "steam_app_id": "1086940",
   "engine": "larian",
