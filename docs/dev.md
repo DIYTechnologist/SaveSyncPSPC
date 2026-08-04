@@ -218,9 +218,15 @@ This was verified two ways:
 - **The underlying graft mechanism** (`Build`, 64-byte alignment, real LZ4, physical-order MD5, `Platform` rewrite, `sce_sys/`-untouched upload) was confirmed working in-game via the manual recipe above: a real 39-hour PC save loaded correctly on a real PS5 with the right character/state.
 - **The generic CLI wiring itself** (`--ps5-save-name`, `resolveDynamicImages`, `ResolvePayload`/`ResolvePCFile`, `bridge.PCToPS5`) was run for real against the same PS5 and Garlic instance — `save-sync --garlic ... --game bg3 --ps5-save-name sdimg_Save0002 pc-to-ps5 --pc-dir ... --apply --yes` — with no manual probe scripts involved. It correctly discovered the PS5 save's actual `.lsv` filename via mount+list, produced a manifest with the right party/level data and `"Platform" : "Prospero"`, and `ReplacePayload` succeeded without error. This exercises the identical graft mechanism already confirmed above, but the CLI-driven upload itself hasn't had a separate in-game load check yet — that's the next thing to confirm before calling the CLI path fully proven end-to-end.
 
-`ConvertFromPS5` (PS5 -> PC, `Platform` `"Prospero"` -> `"Steam"`) uses the same mechanism in the opposite direction but has not been field-tested at all yet, manually or via the CLI.
+`ConvertFromPS5` (PS5 -> PC, `Platform` `"Prospero"` -> `"Steam"`) uses the same mechanism in the opposite direction and has since been field-tested — and is currently broken: every save tested hangs at 0% on PC load, both genuinely PS5-native content and content that's round-tripped Steam-native underneath, which rules out both "bad rebuild" and "PS5 content incompatible" as the sole explanation. Root cause unresolved; see `docs/bg3.md` for the full test log and the one proposed diagnostic that was never run.
 
 Known gaps in the current wiring: only one save image per BG3 profile is supported (`ConvertToPS5`/`ConvertFromPS5` both error on `len(images) != 1`); the `.WebP` thumbnail and the OS-level save-list display name/art aren't updated by a graft, so the save list may show stale text/art until the game next saves into that slot (noted in the conversion manifest); and `save-sync inspect` doesn't support dynamic-image engines yet (see "Dynamic image resolution" above).
+
+**See `docs/bg3.md`** for the full write-up: transport lessons, the three LSPK writer requirements, and the complete PS5→PC test log.
+
+## Resident Evil 2 (research spike, not a supported engine)
+
+`internal/reengine` decodes/re-encodes Capcom RE Engine's "DSSS" save container (Blowfish-LE cipher, murmur3 checksum) and, behind the `reengine_rsz` build tag, parses its RSZ field data. Confirmed byte-exact against real PC and PS5 saves, and a full schema diff between platforms found zero structural differences - yet PC→PS5 conversion still doesn't work in-game, for reasons that turned out to be outside both the container and the field data. This is a research spike, not a wired-in engine: no `games/re2.json`, no `engine.Engine` implementation, nothing reachable from the CLI or UI. **See `docs/ressave.md`** for the full write-up.
 
 ## Portability Gate (Unreal)
 
