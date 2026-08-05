@@ -1,0 +1,27 @@
+{
+  "game": "subnautica_below_zero",
+  "name": "Subnautica: Below Zero",
+  "ids": [
+    {
+      "id": "PPSA02457",
+      "region": "USA"
+    }
+  ],
+  "pc_save_dirs": {
+    "windows": "C:\\Program Files (x86)\\Steam\\steamapps\\common\\SubnauticaZero\\SNAppData\\SavedGames",
+    "linux": "~/.local/share/Steam/steamapps/common/SubnauticaZero/SNAppData/SavedGames"
+  },
+  "steam_app_id": "848450",
+  "engine": "unityblb",
+  "engine_config": {
+    "images": [
+      {
+        "logical": "slot0",
+        "label": "Slot 1",
+        "save_name": "sdimg_slot0000",
+        "pc_dir": "slot0002",
+        "payload": "slot0000.blb"
+      }
+    ]
+  }
+}
