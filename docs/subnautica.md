@@ -1,6 +1,8 @@
 # Subnautica
 
-Engine: `internal/engine/unityblb` (`games/subnautica.json`, title `PPSA02453`).
+Engine: `internal/engine/unityblb` (`games/subnautica.json`, title
+`PPSA02453`; also `games/subnautica_below_zero.json`, title `PPSA02457` -
+Below Zero shares the exact same save format, see "Below Zero" below).
 
 ## Where the PC save lives
 
@@ -89,7 +91,35 @@ tested: actually loading a converted save in-game.
 
 Only `slot0000` is declared in `games/subnautica.json` today, since that's
 the only save slot exercised so far; a second/third slot just needs
-another `images` entry (`sdimg_slot0001`/`slot0001.blb`/`slot0001`, etc. -
-Subnautica supports up to 3 slots per the same UI as Subnautica: Below
-Zero, which shares this save layout but isn't wired up as its own profile
-yet).
+another `images` entry (`sdimg_slot0001`/`slot0001.blb`/`slot0001`, etc).
+
+## Below Zero
+
+`games/subnautica_below_zero.json` (title `PPSA02457`) reuses the
+identical `unityblb` engine and container format - confirmed byte-for-byte
+against a real PS5 Below Zero save (`sdimg_slot0000`) and its PC
+equivalent, including a live end-to-end `save-sync` CLI dry run (both
+directions) against a real Garlic instance. `gameinfo.json`'s schema has
+grown a `storyVersion` field and a nested `gameOptions` object compared to
+the base game, but the one field this tool actually checks
+(`protoBufVersion`) is unaffected and matched on both sides without
+needing an override.
+
+**Slot-number mismatch, and why it isn't a bug**: the base game's profile
+gets away with a fixed `sdimg_slot0000` <-> PC `slot0000` pairing because
+this user's only save on either platform happens to occupy slot 0 on
+both. That's a coincidence, not a rule - Below Zero exposes this
+immediately: the PS5 side has exactly one save (`sdimg_slot0000`), but the
+PC install has three slots (two old saves plus a third, freshly-created
+empty save made specifically to pair with the new PS5 save for this
+comparison). The profile's `pc_dir` is hardcoded to `"slot0002"` - the
+slot that actually corresponds to the PS5 save (matching
+`protoBufVersion` and near-identical fresh `gameTime`), not `"slot0000"`.
+
+There's no general way to infer this pairing automatically the way
+BG3/RE2 do for their PS5-side slot ambiguity (`--ps5-save-name` works
+because there's exactly one file to discover once you know the slot;
+here, all three PC slots are equally valid candidates and only the
+human knows which one is the intended pair). Switching which PC slot a
+profile targets means editing that profile's `pc_dir` by hand - this is
+a known, deliberate limitation, not a TODO to silently paper over.

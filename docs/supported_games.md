@@ -42,6 +42,20 @@ More details:
 
 - [Subnautica notes](subnautica.md)
 
+## Subnautica: Below Zero
+
+- Game key: `subnautica_below_zero`
+- Engine: `unityblb` (identical format to Subnautica)
+- PS5 title ID: `PPSA02457`
+- Region: USA
+- PC target: Steam
+- PC has 3 save slots but PS5 has only 1; the profile's `pc_dir` is hardcoded to whichever PC slot pairs with the existing PS5 save (`slot0002` today) - see "Below Zero" in `subnautica.md` for why this can't be auto-detected
+- Confirmed byte-identical round trip (both directions) against a real PS5 save and its paired PC save, and a live end-to-end CLI run (both directions) against a real Garlic/PS5
+
+More details:
+
+- [Subnautica notes](subnautica.md#below-zero)
+
 ## Adding Support
 
 New games are metadata only: a `games/<key>.json` profile naming an existing engine (`unreal`, `larian`, `reengine`, or `unityblb`) and that engine's config - no per-game Go code needed. A genuinely new save format needs a new `internal/engine/<name>` package implementing `engine.Engine`.
