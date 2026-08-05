@@ -2,7 +2,7 @@
 
 PC-side save bridge for moving supported game saves between Garlic Save Manager on PS5 and a local PC save directory.
 
-The service discovers supported saves from Garlic, groups the save images that belong together, runs a game-specific conversion plugin, and can write the converted payloads back through Garlic. Garlic still owns the PS5 side of the process: mounting, decrypting, uploading payloads, and re-encrypting saves.
+The service discovers supported saves from Garlic, groups the save images that belong together, runs the save-format engine declared by that game's profile (see "Game Discovery" below), and can write the converted payloads back through Garlic. Garlic still owns the PS5 side of the process: mounting, decrypting, uploading payloads, and re-encrypting saves.
 
 # Licensing
 
@@ -185,6 +185,43 @@ BG3 saves have no fixed filenames — pass `--ps5-save-name` naming the Garlic `
 ```
 
 `--pc-dir` should point at the folder containing that save's single `.lsv` (and its matching `.WebP`), same as a real Steam BG3 save folder. `save-sync inspect` doesn't support BG3 yet (dynamic-image engines aren't wired into it) — errors clearly rather than doing something misleading.
+
+### Resident Evil 2 (dynamic save slot)
+
+Like BG3, RE2 save slots aren't fixed — pass `--ps5-save-name` naming the Garlic slot to target (the PC-side filename for that slot is derived automatically, since one PC save directory holds every slot side by side):
+
+```sh
+./bin/save-sync \
+  --garlic http://192.168.2.67:8082 \
+  --game re2 \
+  --ps5-uid 1ea2f4d9 \
+  --ps5-save-name sdimg_SAVESERVICE-LINE-0-1Slot \
+  pc-to-ps5 \
+  --pc-dir "~/.local/share/Steam/userdata/<id>/883710/remote/win64_save" \
+  --output-dir ./converted_for_ps5 \
+  --apply \
+  --yes \
+  --force
+```
+
+PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-tested but not yet confirmed in-game. The global profile/settings slot (`data00-1.bin`) is refused outright — converting it crashed the game at startup. See `docs/ressave.md` for the full format writeup.
+
+### Subnautica (fixed save slot)
+
+Subnautica's PC save lives inside the game's own install directory rather than under `AppData` — point `--pc-dir` at the `SavedGames` folder itself, not a specific slot (the profile picks the slot subdirectory):
+
+```sh
+./bin/save-sync \
+  --garlic http://192.168.2.67:8082 \
+  --game subnautica \
+  --ps5-uid 1ea2f4d9 \
+  ps5-to-pc \
+  --pc-dir "~/.local/share/Steam/steamapps/common/Subnautica/SNAppData/SavedGames" \
+  --output-dir ./converted_from_ps5 \
+  --force
+```
+
+No encryption, no proprietary class/versioning system — the simplest format this tool handles. `subnautica_below_zero` uses the same engine and works the same way, except its PC/PS5 slot-number pairing is hardcoded per-profile rather than matching by number (see `docs/subnautica.md`). Not yet tested: loading a converted save in-game for either title.
 
 ## Docker
 

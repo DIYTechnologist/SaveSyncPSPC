@@ -27,6 +27,22 @@ More details:
 
 - [Dynamic image resolution / Larian engine notes](dev.md#dynamic-image-resolution-games-with-no-fixed-filenames)
 
+## Resident Evil 2 (2019)
+
+- Game key: `re2`
+- Engine: `reengine` (RE Engine DSSS container)
+- PS5 title ID: `PPSA04288`
+- Region: USA
+- PC target: Steam
+- Save slot isn't fixed - pass `--ps5-save-name` naming the Garlic slot to target; the PC-side filename for that slot is derived automatically
+- PC->PS5 confirmed working against a real save (two different saves loaded correctly); PS5->PC is implemented and unit-tested but not yet confirmed in-game
+- The global profile/settings slot (`data00-1.bin`) is refused outright - converting it crashed the game at startup
+
+More details:
+
+- [RE2 investigation log](ressave.md)
+- [RE2 deep technical reference (container format, RSZ, and the full eboot.bin disassembly)](dev-res2.md)
+
 ## Subnautica
 
 - Game key: `subnautica`
