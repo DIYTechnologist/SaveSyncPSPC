@@ -1,15 +1,46 @@
 # Resident Evil 2 (2019) Save Format — Investigation Notes
 
-Research spike into whether `save-sync`'s PC↔PS5 bridge could be extended to Resident Evil 2 (Capcom's RE Engine), prompted by the user having both a PC (Steam) and PS5 copy with real saves on each. The container format, cipher, and checksum are now fully understood and implemented in `internal/reengine`, validated byte-for-byte against real game-written files. **PC → PS5 conversion does not work in-game** despite that. A field-level parser was subsequently built and now reads both platforms' saves completely, which established that the field schema is *identical* across platforms — so the cause lies outside both the container and the save data itself. This document is a research writeup, not a supported-game guide — there is no `games/re2.json` and no `engine.Engine` implementation. `internal/reengine` is not wired into the rest of the tool.
+Research spike into whether `save-sync`'s PC↔PS5 bridge could be extended to Resident Evil 2 (Capcom's RE Engine), prompted by the user having both a PC (Steam) and PS5 copy with real saves on each.
+
+**PC → PS5 conversion works: a real Steam save was converted and loaded successfully on a real PS5.** Getting there took four separate discoveries, the last two of which were only found by disassembling the game's own executable.
+
+RE2 is now a wired-in game: `games/re2.json` selects `internal/engine/reengine`, which adapts the format work in `internal/reengine` to the `engine.Engine` interface, so `save-sync --game re2` works the same way `clair` and `bg3` do. The conversion library itself is verified to reproduce, byte-for-byte, the exact files that loaded on the console. **The CLI path has not yet had its own end-to-end run against a live console** (Garlic went offline before that could be done) - the library beneath it is confirmed, but the wiring around it is only unit-tested.
+
+## What a working conversion requires
+
+All four are necessary; each was a silent failure until found:
+
+1. **Container rebuild** — DSSS header, Blowfish-LE/CBC cipher, murmur3 checksum. Byte-exact against every real save.
+2. **Preserve the trailing slot number.** Blowfish covers only the 8-byte-aligned prefix of the body; the remaining 1-7 bytes are stored in the clear and hold the save's own slot id. Dropping them truncates the file.
+3. **Re-serialize the field data with alignment recomputed for the destination body offset.** RSZ field alignment is computed against the body's *absolute file offset*. A PC body sits at `0x20` (16-aligned), a PS5 body at `0x18` (8 mod 16), so copying a body verbatim between them shifts every 16-byte-aligned field - including array headers - by 8 bytes. This was the root cause of the crashes.
+4. **Retarget the platform fields.** Class `0x8b7dd7a1` carries `0xb41fa365` (Enum: PC `3` / PS5 `2`) and `0xe231b945` (Boolean: PC `true` / PS5 `false`). Without these the game parses the save fine and then refuses it as "not compatible".
+
+The progression through the fixes was itself the clearest diagnostic - each one produced a distinctly different failure:
+
+| State | Result in-game |
+|---|---|
+| Verbatim body copy | Hard crash (SIGSEGV, null write on `SaveThread`) |
+| Body kept at `0x20` (ID field retained) | "Can't load the saved data because it is corrupted" |
+| Re-aligned for `0x18`, native PS5 shape | "This save data is not compatible and cannot be used" |
+| ...plus platform fields retargeted | **Loads** |
+
+Confirmed twice: a 728 KB fresh autosave (`data000.bin` -> slot 0) and a 2.5 MB Dec-2020 manual save (`data001Slot.bin` -> slot 1), so the process is not specific to one save's size, age, or slot type. Convert each PC file into the PS5 container for **the same slot** - the trailing slot id must match the container it lands in.
+
+### Known cosmetic limitation: stale save-select metadata
+
+A converted save loads the correct game state, but the save-select / loading screen shows the *previous* occupant's text (area, goal, times-saved, character). That metadata lives in the PS5's OS-level save registration - `sce_sys/param.sfo`'s `DETAIL` and `SUBTITLE` fields - not in the save file, and Garlic's raw file writes do not update it. It should correct itself the next time the game saves into that slot.
+
+Rewriting `param.sfo` to fix the text is **not** recommended: the BG3 investigation established that writing anything under `sce_sys/` breaks the container's OS-level registration (producing phantom duplicate entries and saves vanishing from the in-game list - see `docs/bg3.md`). That is a real risk of breaking a working container for a purely cosmetic gain.
 
 ## Status
 
 | Direction | Status |
 |---|---|
 | Decode/re-encode a save (either platform) | Works, byte-exact |
-| PC → PS5 conversion | **Fails in-game** at three different points depending on which files are touched (see "Live-device findings") |
-| PS5 → PC conversion | Not attempted |
-| RSZ field parsing (both platforms) | Works — all real saves parse fully |
+| RSZ field parsing (both platforms) | Works — all real saves parse fully, schemas identical across platforms |
+| RSZ re-serialization | Works — reproduces every real save's exact layout (padding bytes aside; see below) |
+| **PC → PS5 conversion** | **Works — confirmed on a real PS5 with two different saves** (a small fresh autosave and a 2.5 MB deep-progress manual slot) |
+| PS5 → PC conversion | Not attempted (should be the same process in reverse) |
 
 ## The container format ("DSSS")
 
@@ -115,15 +146,114 @@ All testing used Garlic Save Manager against a real PS5, converting real Steam s
 
 Three independent validation paths — slot-save pre-check, autosave post-load, and profile-at-startup — all reject PC-authored content on a version- and character-matched, byte-correct container whose field schema is now *known* to be identical between platforms.
 
-Ruled out: patch/build version mismatch, container/block allocation size, character mismatch, the slot-ID truncation bug (real, fixed, but not sufficient alone), PS5 keystone/signing (`sce_sys/keystone` is tied to the game package at build time, identical for every save of a given build, and never touched by this tool), and — now — RSZ schema divergence.
+**Every hypothesis checkable from outside the game binary has now been ruled out:**
 
-That leaves the cause somewhere outside both the container and the field data. The most plausible remaining candidate is the PS5's own save-registration state: `sce_sys/param.sfo` carries a 1024-byte `PARAMS` blob whose first 32 bytes look like a digest. A quick check showed it is not a plain SHA-256 of any individual `.bin` file, which rules out only the simplest form — a keyed or whole-container digest remains possible, and `param.sfo` cannot be rewritten anyway without breaking the OS-level registration (proven during the BG3 work, see `docs/bg3.md`). If the console validates saves against state that Garlic's file-level writes cannot reach, this approach cannot work for RE2 regardless of how correct the file is.
+- Patch/build version mismatch (matched, still crashed)
+- Container/block allocation size (`SAVEDATA_BLOCKS` = 256 ≈ 8MB, far more than needed)
+- Character mismatch (matched, still crashed)
+- The slot-ID truncation bug (real, fixed, but not sufficient alone)
+- PS5 keystone/signing (`sce_sys/keystone` is tied to the game package at build time, identical for every save of a given build, never touched by this tool)
+- RSZ schema divergence (identical structure across platforms - see above)
+- **`param.sfo`'s `PARAMS` blob as a content digest.** Pulled `param.sfo` from all three RE2 containers (`data000.bin`, `data021Slot.bin`, `data00-1.bin`) on both PS5 accounts used for testing. Within one account, `PARAMS` is *byte-identical* between `data021Slot.bin` and `data00-1.bin` (completely different files, different sizes) and differs from `data000.bin`'s value in exactly **2 bytes**, at fixed offsets, with the same two values across both accounts. That's the signature of a small structured field (almost certainly a save-type flag distinguishing the autosave from the slot/profile family, matching Sony's documented `sceSaveDataParam` shape) — not a hash, which would change throughout if content changed at all. This rules out the "unreachable per-save digest" theory that was the last standing hypothesis.
 
-Notably, this is the same wall the BG3 investigation hit from the opposite direction — there the PS5 accepted a grafted save with only a non-fatal "tampering" warning, whereas RE2 refuses outright.
+That closes out everything reachable through static Garlic-level inspection alone. Two further live tests below (a kitchen-sink field patch, and a real crash dump via kernel-log capture) went further still and confirm the same conclusion much more directly.
 
-## Repo state
+### A promising lead that turned out to be a dead end: the "platform flag" fields
 
-- `internal/reengine/` is new and reviewed: 22 tests in the default build, 26 with `-tags reengine_rsz` (`rsz.go` now has its own test coverage, including a regression test for the alignment-base bug), all passing.
-- `go.mod`/`go.sum` gained `golang.org/x/crypto` (pinned to v0.31.0, not latest, to stay on Go 1.22 — see `go.mod`) for the Blowfish primitive, and `gopkg.in/yaml.v3` (from the earlier, unrelated ludusavi-manifest work).
-- Nothing here is wired into `games/`, the CLI, or the UI. `internal/reengine` has no callers outside its own package and its own tests.
-- The PS5's "Modded" account (`1ea2f4da`) currently has a converted PC autosave in `data000.bin` (idx varies — resolve by name/uid, not a cached index) left in place from testing; a native backup exists in this session's temp directory if it needs restoring. The "User1" account's files are all back to native/working state.
+Two fields inside a small, fixed top-level settings class (`0x8b7dd7a1`) showed a **perfectly consistent** split with zero exceptions across every sample checked (3 PC saves, 4 PS5 saves, both characters, multiple accounts):
+
+| Field | PC (3/3) | PS5 (4/4) |
+|---|---|---|
+| `0xb41fa365` (Enum) | 3 | 2 |
+| `0xe231b945` (Boolean) | true | false |
+
+This is exactly the shape BG3's `"Platform": "Steam"/"Prospero"` field had - a value with no overlap at all between platforms, in a settings-shaped object present in every save. To test it, `internal/reengine/rsz.go` gained `Value.ValueOffset`/`ValueSize` (the byte range a scalar value occupies in the body), enabling a surgical patch - the same "rewrite one field, leave everything else untouched" approach used for BG3's `Platform` field, rather than a full RSZ re-serialization. A real PC save had exactly these 2 bytes changed (confirmed: a full body diff showed precisely 2 differing bytes out of 2,542,812, at the expected offsets) and was uploaded to a live PS5.
+
+**It still crashed identically.** This is a genuine, informative negative result: the cleanest, most consistent signal found in the entire investigation is not the actual blocker.
+
+### The last black-box test: patching every disjoint field at once
+
+Rather than stop at one lead, every field across the whole body that showed zero value-overlap between platforms was collected and patched simultaneously - a deliberately blunt "kitchen sink" test. Of the 38 raw candidates, 8 were excluded as clearly not flag-like (values in the ~6×10¹⁷ range, consistent with .NET-style ticks - i.e. per-save timestamps, which will always differ between any two saves regardless of platform and would prove nothing if patched). The remaining 30 fields (33 occurrences, since some classes appear more than once in the tree) were patched to their most-common PS5-observed value in one pass - a 47-byte total change across a 2.5MB body, everything else byte-for-byte untouched. Uploaded and tested live.
+
+**It also crashed identically.** This closes out black-box investigation for real: every field that differs measurably and consistently between a PC-origin and PS5-origin save, patched all at once, still doesn't produce a loadable save. Whatever the console/game validates at load time is not expressible as a save-data field value difference at all - it lives in logic the game executable runs, which is unreachable without disassembling the binary itself.
+
+### Getting a real crash dump: `klogsrv` and the kernel log
+
+The PS5 used for testing is jailbroken (required for Garlic itself), and exposes a kernel/syslog stream over TCP on port 3232 (`klogsrv`, a common homebrew tool in that ecosystem). Streaming this during a Continue attempt captures real `libSceSaveData` API tracing and, critically, a full crash dump when the game faults - a fundamentally cheaper way to get information than disassembling the binary, since it's just capturing debug output the system already produces.
+
+Two independent crash captures, on two very different save contents (the original 39-hour save and a fresh/early save, see below), both show:
+
+```
+signal: 11 (SIGSEGV)
+thread name: SaveThread
+proc name: eboot.bin
+reason: page fault (user write data, page not present)
+fault address: 0000000000000000
+rip: 0000000003095285          <- IDENTICAL in both captures
+```
+
+A null-pointer **write** crash on the game's own save-loading thread, at the **exact same instruction address** both times, despite the two saves differing enormously in content and size. This is the single cleanest fact in the entire investigation: the crash is not reacting to *what* is in the save - it triggers deterministically at a fixed point in the game's own code for *any* PC-origin/rebuilt save.
+
+One early register match looked promising - `r14` in the first capture held `0x5507376f`, which is exactly a real field hash from class `0x3b9a2a09` (the same class from the alignment-bug work). But that hash turned out to occur **3,444 times** in the 39-hour save (a per-room "gimmick"/interactable-state field - large counts are simply what a late-game save has, not a bug), so a register coincidentally holding it isn't strong evidence by itself. The second capture confirmed this: `r14` held a completely unrelated value that doesn't match any known field hash, while every other detail of the crash (signal, thread, fault address, and especially `rip`) stayed identical. The register match was a coincidence, not a diagnosis.
+
+### Testing volume/capacity as a distinct hypothesis
+
+The `r14` coincidence still raised a real, previously untested hypothesis: not a wrong *value*, but too much *volume* - if the game allocates something sized around a typical/expected count and a 57x-larger late-game save exceeds it, a null-pointer write on the loading thread is exactly the failure mode you'd expect. This is a fundamentally different category from every prior test, which only checked field values, never field *counts*.
+
+All three available real PC saves were similarly late-game (3,444-3,480 occurrences of the field in question), so testing this needed a genuinely early save. The user generated one directly on the PC (a fresh autosave, 728KB vs the original 2.5MB, 366 occurrences of the same field - within range of PS5's own native 60, not PC's 3,444). Converted and uploaded the same way as every other test.
+
+**It crashed identically** - same signal, same thread, same fault address, same `rip` as both prior captures. This rules out volume/capacity as the cause as conclusively as the value-based hypotheses were already ruled out: a save with barely more of this data than PS5's own native content still fails exactly the same way.
+
+### Breakthrough: reading the game's own code, and the alignment root cause
+
+The user supplied a copy of the game's PS5 executable (`eboot.bin`, v01.003 — matching the console's patch level). Critically it is **decrypted**: the inner ELF sits at file offset `0x1a0`, and the text segment disassembles into coherent x86-64. The crash address maps in cleanly — text loads at `0x400000` per the crash dump while the ELF's own vaddr base is `0`, so `rip 0x3095285` is module offset `0x2C95285`.
+
+Two things confirmed the binary corresponds to what actually crashed: the disassembly at that address is a well-formed function, and the crash dump's `rdi = 0` is exactly what `xor edi,edi` — two instructions before the reported `rip` — produces.
+
+**What the code at the crash site actually does:**
+
+```
+309523a:  test rdi,rdi          ; is arg1 null?
+3095244:  je   0x3095283        ; yes -> null branch
+3095283:  xor  edi,edi          ; null branch: rdi = 0
+3095285:  mov  rsi,rax          ; <- reported rip
+3095288:  call 0x3094a40        ; call with rdi = NULL
+```
+
+And `0x3094a40` is **not** a deserializer - it is an assert/log routine: it does `cmp BYTE PTR [rcx],0x23` / `cmp [rcx+1],0x20` (testing for a `"# "` message prefix), loads a format string with `lea rsi,[rip+...]`, and calls a printf-style vararg function (`xor eax,eax` before the call). In a retail build the logger global is null, so the *error reporter itself* faults.
+
+**The crash was therefore a symptom, not the cause** - the game had already detected a problem and was trying to report it. Every black-box test up to this point had been chasing the wrong thing.
+
+Following the recursion frames from the backtrace (`0x3096673 / 0x3095942 / 0x3095b11`) led to `0x3095ac0`, an array-allocation helper with overflow guards, where frame `0x3095b11` sits in its size computation (`newCount = count + additional`, then a `UINT64_MAX / elemSize` overflow check, falling through to `xor r13d,r13d` - return NULL). So the deserializer was reading **garbage array counts**, allocation refused them, and the resulting null reached the assert path.
+
+**Why the counts were garbage - the actual root cause.** This investigation had already established (see the alignment-base bug above) that RSZ field alignment is computed against the body's *absolute file offset*. A PC body sits at `0x20` (16-aligned); a PS5 body sits at `0x18` (≡ 8 mod 16). `ConvertPCToPS5` copied the body **verbatim** into a container where it now started 8 bytes off, so every 16-byte-aligned field inside it - including array headers - was misread. The fact was known; its implication for conversion was missed.
+
+**Confirmed live.** Rebuilding a PC save while *keeping* the ID field (so the body stays at `0x20`, the offset it was serialized for) and uploading it produced a **completely different result: no crash.** Instead the game showed a graceful *"Can't load the saved data because it is corrupted"* dialog - meaning it parsed the container and body successfully, walked far enough to run its own validation, and rejected it cleanly. Setting the embedded ID to `0` changed nothing, so the rejection is triggered by the `HAS_ID` flag itself (native PS5 saves never set it), not by the ID value.
+
+### The RSZ re-serializer (`internal/reengine/rszwrite.go`)
+
+`WriteRSZObjects(objs, dataOffset, trailer)` re-emits a parsed tree laid out for a given body offset - writing a tree parsed at one offset back out at another is exactly what re-aligns it. Two subtleties were needed to make it faithful:
+
+- **The declared size is not the consumed size.** The format stores an explicit size ahead of each value, and it does not always match the bytes the value occupies (a Boolean may be declared 4 but occupy 1, with the field's 4-byte alignment absorbing the rest). Re-emitting the consumed size corrupted both the stored size and the alignment after it. `Value.DeclaredSize` now carries the format's own value.
+- **Empty strings have no terminator.** The reader trims one trailing NUL, so a non-empty string round-trips by re-appending it - but an empty string is stored as length `0` with no units at all. Blindly adding a terminator lengthened the body and shifted everything after it.
+
+**Validation:** re-emitting each of the ten real saves at its own original base reproduces the original length exactly, with two files byte-identical and the rest differing only in padding. Padding cannot be reproduced byte-for-byte because the game's own writer leaves stale garbage there (values like `0x24924924` are common) rather than zeroing it; since the reader skips padding, this does not matter. Matching length with all field positions unchanged is the meaningful property, and it holds for every sample on both platforms.
+
+## Using it
+
+```sh
+save-sync --garlic http://<ps5>:8082 --game re2 --ps5-uid <uid> \
+  --ps5-save-name sdimg_SAVESERVICE-LINE-0-1Slot \
+  pc-to-ps5 --pc-dir <steam save dir> --output-dir ./out --apply --yes --force
+```
+
+Which slots exist differs per player, so the target slot is named with `--ps5-save-name` (the same mechanism BG3 uses) rather than being fixed in the profile. The PC-side filename is *derived* from that slot rather than discovered: a PC save directory holds every slot's file side by side, and a save carries its slot number internally, so it must be written into the container for its own slot. The engine also cross-checks the source save's embedded slot number against the target container and refuses a mismatch.
+
+The global profile/settings save (`data00-1.bin`, slot `-1`) is refused outright - converting it was observed to crash the game at startup.
+
+## Remaining work
+
+- **The CLI path needs one live end-to-end run.** The underlying library is confirmed byte-identical to saves that loaded on a console, but `save-sync --game re2 ... --apply` has not itself been exercised against a real PS5.
+- **PS5 → PC** is implemented and unit-tested but never confirmed in-game. It also writes `0` as the embedded Steam account id, which the game may reject; if so it needs the real id of the account that will load the save.
+- The **stale save-select metadata** (above) is unresolved by design, not oversight.
+- The **reflection symbol table** is present in the executable's rodata (real names like `get_SyncTarget`, `via.movie.MovieManager.GCTarget`). Since RSZ hashes are murmur3 of these names, hashing that table would recover human-readable field names locally, without the multi-megabyte external schema dumps - useful for making sense of the two platform fields rather than treating them as magic constants.

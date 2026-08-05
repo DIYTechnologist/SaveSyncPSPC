@@ -1,13 +1,18 @@
-//go:build reengine_rsz
-
-// DIAGNOSTIC ONLY - excluded from normal builds (build tag reengine_rsz).
+// This file implements a reader for the tagged-field object format RE
+// Engine uses inside a decrypted DSSS body (nicknamed "RSZ" by the
+// modding community). Every field embeds its own type tag and, for
+// variable-length values, its own size, so this walks the structure
+// without needing Capcom's field names or enum labels - those live in an
+// external per-game reflection dump this package does not use.
 //
-// Nothing on the conversion path uses this: Decode/Build treat a save's
-// body as opaque bytes, which is why converting a save never needs to
-// understand the field data inside it. This exists to inspect that data
-// directly - e.g. diffing a PC save against a PS5 one to look for
-// platform divergence. Build with `-tags reengine_rsz` to use it.
+// Parsing is required for conversion, not merely diagnostic: field
+// alignment is computed against the body's absolute file offset, so a
+// body cannot be moved between containers of different header sizes
+// without being re-serialized (see rszwrite.go and docs/ressave.md).
 //
+// Verified against every real save available during development (five
+// PC, five PS5, autosaves and manual slots): all parse to completion
+// with no unknown-type fields.
 // This file implements a reader for the tagged-field object format RE
 // Engine uses inside a decrypted DSSS body (nicknamed "RSZ" by the
 // modding community). Every field embeds its own type tag and, for
@@ -116,6 +121,21 @@ type Value struct {
 	StructBytes []byte
 	Class       *RSZClass
 	Array       *RSZArray
+	// ValueOffset/ValueSize locate this value's raw bytes within the
+	// body byte slice that was parsed - set only for the fixed-size
+	// scalar types (Enum/Boolean/S*/U*/C*), which is enough to patch a
+	// single field's value in place without a full RSZ writer, the same
+	// way BG3's Platform field is patched with a targeted rewrite rather
+	// than a full re-serialization.
+	ValueOffset int
+	ValueSize   int
+	// DeclaredSize is the size field the format itself stores ahead of a
+	// value, which is not always the number of bytes the value consumes:
+	// a Boolean may be declared 4 but occupy 1, with the field-level
+	// 4-byte alignment absorbing the rest. Re-emission must reproduce the
+	// declared value, since it drives both the stored size and the
+	// alignment that follows it.
+	DeclaredSize uint32
 }
 
 // RSZField is one hash-tagged field inside an RSZClass.
@@ -309,14 +329,19 @@ func readValue(c *rszCursor, ft FieldType) (Value, error) {
 		if err != nil {
 			return Value{}, err
 		}
-		return Value{Type: FieldTypeString, Str: s}, nil
+		return Value{Type: FieldTypeString, Str: s, DeclaredSize: size}, nil
 	default:
 		c.alignUp(4)
 		size, err := c.u32()
 		if err != nil {
 			return Value{}, err
 		}
-		return readSizedValue(c, ft, size)
+		v, err := readSizedValue(c, ft, size)
+		if err != nil {
+			return Value{}, err
+		}
+		v.DeclaredSize = size
+		return v, nil
 	}
 }
 
@@ -327,6 +352,24 @@ func readSizedValue(c *rszCursor, ft FieldType, size uint32) (Value, error) {
 	if size != 1 {
 		c.alignUp(int(size))
 	}
+	valueOffset := c.pos
+	v, err := readSizedValueInner(c, ft, size)
+	if err != nil {
+		return Value{}, err
+	}
+	// Struct/Array already set their own offset/size (Struct is the raw
+	// bytes themselves; Array has no single scalar location) - only tag
+	// the plain scalar types this exists to let a caller patch in place.
+	switch ft {
+	case FieldTypeArray, FieldTypeStruct:
+	default:
+		v.ValueOffset = valueOffset
+		v.ValueSize = c.pos - valueOffset
+	}
+	return v, nil
+}
+
+func readSizedValueInner(c *rszCursor, ft FieldType, size uint32) (Value, error) {
 	switch ft {
 	case FieldTypeEnum:
 		var iv int64
@@ -523,7 +566,7 @@ func readArray(c *rszCursor) (*RSZArray, error) {
 			if err != nil {
 				return nil, err
 			}
-			values = append(values, Value{Type: FieldTypeString, Str: s})
+			values = append(values, Value{Type: FieldTypeString, Str: s, DeclaredSize: size})
 			continue
 		}
 		v, err := readSizedValue(c, memberType, memberSize)

@@ -3,7 +3,6 @@ package reengine
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 )
 
@@ -77,26 +76,4 @@ func Build(body []byte, key []byte, opts BuildOptions) ([]byte, error) {
 	buf.Write(hashBytes[:])
 
 	return buf.Bytes(), nil
-}
-
-// ConvertPCToPS5 rewrites a PC-shaped DSSS save (Blowfish+HasID) into a
-// PS5-shaped one (Blowfish only, no ID field) - the container-level
-// shape difference confirmed this session between real PC and PS5 RE2
-// saves. The decrypted field data itself is carried through unchanged;
-// whether that's sufficient for the game to accept the result (as
-// opposed to something platform-specific also living inside the RSZ
-// field data itself, which this package doesn't parse) hasn't been
-// confirmed and needs a real device test.
-func ConvertPCToPS5(pcData []byte, key []byte) ([]byte, error) {
-	decoded, err := Decode(pcData, key)
-	if err != nil {
-		return nil, fmt.Errorf("decoding PC save: %w", err)
-	}
-	// Converting a file whose own checksum doesn't match would launder
-	// corrupt input into output carrying a freshly-valid one, hiding the
-	// damage from every check downstream.
-	if !decoded.HashValid {
-		return nil, errors.New("refusing to convert: source save's checksum doesn't match its contents (file is corrupt or truncated)")
-	}
-	return Build(decoded.Body, key, BuildOptions{HasID: false})
 }

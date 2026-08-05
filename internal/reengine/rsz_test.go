@@ -1,5 +1,3 @@
-//go:build reengine_rsz
-
 package reengine
 
 import (
