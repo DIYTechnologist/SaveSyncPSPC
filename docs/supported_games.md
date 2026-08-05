@@ -27,8 +27,23 @@ More details:
 
 - [Dynamic image resolution / Larian engine notes](dev.md#dynamic-image-resolution-games-with-no-fixed-filenames)
 
+## Subnautica
+
+- Game key: `subnautica`
+- Engine: `unityblb` (gzip + flat length-prefixed entries)
+- PS5 title ID: `PPSA02453`
+- Region: USA
+- PC target: Steam
+- Save slot is fixed (`slot0000`) - only the one slot a real save has been confirmed against is declared today; a second/third slot needs another `images` entry in `games/subnautica.json`
+- No encryption, no proprietary class/versioning system, no platform field in the save data itself - by far the simplest format this tool handles
+- Confirmed byte-identical round trip (both directions) against a real PS5 save and its PC equivalent, and a live end-to-end CLI run (both directions) against a real Garlic/PS5
+
+More details:
+
+- [Subnautica notes](subnautica.md)
+
 ## Adding Support
 
-New games are metadata only: a `games/<key>.json` profile naming an existing engine (`unreal` or `larian`) and that engine's config - no per-game Go code needed. A genuinely new save format needs a new `internal/engine/<name>` package implementing `engine.Engine`.
+New games are metadata only: a `games/<key>.json` profile naming an existing engine (`unreal`, `larian`, `reengine`, or `unityblb`) and that engine's config - no per-game Go code needed. A genuinely new save format needs a new `internal/engine/<name>` package implementing `engine.Engine`.
 
 See [Development Notes](dev.md) for implementation details.
