@@ -11,6 +11,7 @@ import (
 	"savesyncpspc"
 	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/engine/larian"
+	"savesyncpspc/internal/engine/reengine"
 	"savesyncpspc/internal/engine/unreal"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/util"
@@ -27,6 +28,7 @@ func DefaultGamesDir() string {
 func init() {
 	engine.Register(unreal.New())
 	engine.Register(larian.New())
+	engine.Register(reengine.New())
 }
 
 type metadata struct {
