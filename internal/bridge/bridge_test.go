@@ -26,7 +26,7 @@ func TestBackupCurrentSavesCreatesPCAndPS5Layout(t *testing.T) {
 	}, []gameapi.SaveImage{
 		{Logical: "gameplay", SaveName: "sdimg_EXPEDITION0", PCFile: "EXPEDITION_0.sav", Payload: "ue4savegame.dpx.sav"},
 		{Logical: "container", SaveName: "sdimg_SavesContainer", PCFile: "SavesContainer.sav", Payload: "ue4savegame.dpx.sav"},
-	}, when)
+	}, when, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,6 +38,54 @@ func TestBackupCurrentSavesCreatesPCAndPS5Layout(t *testing.T) {
 	}
 	if got := mustRead(t, filepath.Join(backupDir, "PS5", "sdimg_EXPEDITION0", "ue4savegame.dpx.sav")); string(got) != "ps5-main-original" {
 		t.Fatalf("ps5 backup = %q", got)
+	}
+}
+
+func TestBackupCurrentSavesSkipsMissingPCFileWhenNotRequired(t *testing.T) {
+	pcDir := t.TempDir() // no PC save present yet - simulates a first-time ps5-to-pc sync
+	backupDir, err := BackupCurrentSaves(filepath.Join(t.TempDir(), "backup"), "subnautica", pcDir, map[string][]byte{
+		"slot0": []byte("ps5-original"),
+	}, []gameapi.SaveImage{
+		{Logical: "slot0", SaveName: "sdimg_slot0000", PCFile: "slot0000", Payload: "slot0000.blb"},
+	}, time.Time{}, false)
+	if err != nil {
+		t.Fatalf("expected a missing PC file to be tolerated when requirePCFiles=false, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(backupDir, "PC", "slot0000")); !os.IsNotExist(err) {
+		t.Fatal("expected no PC backup to be created for a PC file that never existed")
+	}
+}
+
+func TestBackupCurrentSavesRequiresPCFileWhenRequired(t *testing.T) {
+	pcDir := t.TempDir()
+	_, err := BackupCurrentSaves(filepath.Join(t.TempDir(), "backup"), "subnautica", pcDir, map[string][]byte{
+		"slot0": []byte("ps5-original"),
+	}, []gameapi.SaveImage{
+		{Logical: "slot0", SaveName: "sdimg_slot0000", PCFile: "slot0000", Payload: "slot0000.blb"},
+	}, time.Time{}, true)
+	if err == nil {
+		t.Fatal("expected a missing PC file to error when requirePCFiles=true")
+	}
+}
+
+func TestBackupCurrentSavesCopiesDirectoryShapedPCFile(t *testing.T) {
+	pcDir := t.TempDir()
+	mustWrite(t, filepath.Join(pcDir, "slot0000", "gameinfo.json"), []byte(`{"protoBufVersion":13}`))
+	mustWrite(t, filepath.Join(pcDir, "slot0000", "CellsCache", "baked-batch-cells-1-grp0.zip"), []byte("zip-bytes"))
+
+	backupDir, err := BackupCurrentSaves(filepath.Join(t.TempDir(), "backup"), "subnautica", pcDir, map[string][]byte{
+		"slot0": []byte("ps5-original"),
+	}, []gameapi.SaveImage{
+		{Logical: "slot0", SaveName: "sdimg_slot0000", PCFile: "slot0000", Payload: "slot0000.blb"},
+	}, time.Time{}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustRead(t, filepath.Join(backupDir, "PC", "slot0000", "gameinfo.json")); string(got) != `{"protoBufVersion":13}` {
+		t.Fatalf("gameinfo.json backup = %q", got)
+	}
+	if got := mustRead(t, filepath.Join(backupDir, "PC", "slot0000", "CellsCache", "baked-batch-cells-1-grp0.zip")); string(got) != "zip-bytes" {
+		t.Fatalf("CellsCache backup = %q", got)
 	}
 }
 

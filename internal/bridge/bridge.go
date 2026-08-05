@@ -167,7 +167,16 @@ func PrepareOutputDir(outputDir string, force bool, protected []string) error {
 	return os.MkdirAll(outputDir, 0o755)
 }
 
-func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time) (string, error) {
+// requirePCFiles controls what happens when an image's PCFile doesn't
+// exist locally: true (the pc-to-ps5 direction, where the PC file is
+// about to be read as the conversion source moments later - it must
+// already be there) turns a missing file into an error here rather than
+// a more confusing one downstream; false (ps5-to-pc) just skips that
+// image's backup, since a first-time sync's PC-side output doesn't exist
+// yet and there's nothing to back up - the engine creates it fresh (see
+// e.g. unityblb, which needs no pre-existing PC template unlike Unreal's
+// envelope-graft engines).
+func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][]byte, saveImages []gameapi.SaveImage, now time.Time, requirePCFiles bool) (string, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
@@ -190,11 +199,27 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 		}
 		seen[image.PCFile] = true
 		source := filepath.Join(pcDir, image.PCFile)
+		dest := filepath.Join(pcBackup, image.PCFile)
+		info, err := os.Stat(source)
+		if err != nil {
+			if !requirePCFiles && os.IsNotExist(err) {
+				continue
+			}
+			return "", fmt.Errorf("cannot create backup; missing PC save file: %s", source)
+		}
+		// Some engines' PC-side state is a whole directory tree (e.g.
+		// Subnautica's per-slot save folder), not a single file.
+		if info.IsDir() {
+			if err := util.CopyDir(source, dest); err != nil {
+				return "", err
+			}
+			continue
+		}
 		data, err := os.ReadFile(source)
 		if err != nil {
 			return "", fmt.Errorf("cannot create backup; missing PC save file: %s", source)
 		}
-		if err := AtomicWrite(filepath.Join(pcBackup, image.PCFile), data); err != nil {
+		if err := AtomicWrite(dest, data); err != nil {
 			return "", err
 		}
 	}
@@ -291,7 +316,7 @@ func PS5ToPC(options Options) error {
 		}
 		ps5Payloads[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Payloads, images, time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Payloads, images, time.Time{}, false)
 	if err != nil {
 		return err
 	}
@@ -371,7 +396,7 @@ func PCToPS5(options Options) error {
 		}
 		ps5Templates[image.Logical] = data
 	}
-	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Templates, images, time.Time{})
+	backupDir, err := BackupCurrentSaves(options.BackupRoot, profile.Key, options.PCDir, ps5Templates, images, time.Time{}, true)
 	if err != nil {
 		return err
 	}

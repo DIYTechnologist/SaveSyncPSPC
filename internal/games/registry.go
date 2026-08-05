@@ -12,6 +12,7 @@ import (
 	"savesyncpspc/internal/engine"
 	"savesyncpspc/internal/engine/larian"
 	"savesyncpspc/internal/engine/reengine"
+	"savesyncpspc/internal/engine/unityblb"
 	"savesyncpspc/internal/engine/unreal"
 	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/util"
@@ -29,6 +30,7 @@ func init() {
 	engine.Register(unreal.New())
 	engine.Register(larian.New())
 	engine.Register(reengine.New())
+	engine.Register(unityblb.New())
 }
 
 type metadata struct {
