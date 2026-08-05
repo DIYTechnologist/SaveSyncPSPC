@@ -1,6 +1,6 @@
 # Baldur's Gate 3 — Investigation Notes and Known Issues
 
-Status of the `internal/engine/larian` (LSPK format) work: **PC → PS5 conversion is confirmed working in-game.** **PS5 → PC conversion is broken** — every save tested hangs at 0% on load, regardless of its origin, and the root cause is unresolved. This document covers the format facts, what's confirmed, what's broken, and what a fix would need. Unlike `docs/ressave.md` (Resident Evil 2), BG3 *is* a supported, wired-in game (`games/bg3.json`, `internal/engine/larian`, reachable from the CLI and UI) — this is a status/issues writeup for that existing engine, not a research spike for something unshipped.
+Status of the `internal/engine/larian` (LSPK format) work: **PC → PS5 conversion is confirmed working in-game.** **PS5 → PC conversion is broken** — every save tested hangs at 0% on load, regardless of its origin, and the root cause is unresolved. This document covers the format facts, what's confirmed, what's broken, and what a fix would need. BG3 is a supported, wired-in game (`games/bg3.json`, `internal/engine/larian`, reachable from the CLI and UI) — this is a status/issues writeup for that existing engine.
 
 ## The container format ("LSPK")
 

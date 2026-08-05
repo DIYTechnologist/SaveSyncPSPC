@@ -6,6 +6,8 @@ Research spike into whether `save-sync`'s PC↔PS5 bridge could be extended to R
 
 RE2 is now a wired-in game: `games/re2.json` selects `internal/engine/reengine`, which adapts the format work in `internal/reengine` to the `engine.Engine` interface, so `save-sync --game re2` works the same way `clair` and `bg3` do. The conversion library itself is verified to reproduce, byte-for-byte, the exact files that loaded on the console. **The CLI path has not yet had its own end-to-end run against a live console** (Garlic went offline before that could be done) - the library beneath it is confirmed, but the wiring around it is only unit-tested.
 
+This document is the narrative log: what was tried, in what order, and what each result meant. **See `docs/dev-res2.md`** for the reference version - full byte layouts, the conversion algorithm, and the complete eboot.bin disassembly with actual tool commands and disassembly listings (the ELF-location method, the crash-site trace, the assert-routine and array-allocator analysis, and the `klogsrv` crash-capture methodology).
+
 ## What a working conversion requires
 
 All four are necessary; each was a silent failure until found:
