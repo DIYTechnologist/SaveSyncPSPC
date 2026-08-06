@@ -147,7 +147,23 @@ func flattenCellsCacheZip(path string) ([]Entry, error) {
 // flattenCellsCacheZipData is flattenCellsCacheZip for an already-in-memory
 // zip (e.g. one just produced by groupCellsCacheIntoZips), so a round trip
 // can be verified without touching disk.
+// maxCellsCacheEntrySize bounds how much decompressed data a single
+// CellsCache zip member may expand to. Real world-cell files observed in
+// this project's investigation were well under 1MB each; this generously
+// caps decompression to guard against a zip bomb (a tiny compressed file
+// expanding to gigabytes) in a save from an untrusted source - e.g. one
+// downloaded from a save-sharing site rather than written by the game
+// itself - without constraining any real Subnautica save.
+const maxCellsCacheEntrySize = 256 << 20 // 256MB
+
 func flattenCellsCacheZipData(data []byte) ([]Entry, error) {
+	return flattenCellsCacheZipDataLimited(data, maxCellsCacheEntrySize)
+}
+
+// flattenCellsCacheZipDataLimited is flattenCellsCacheZipData with an
+// injectable per-entry size limit, so tests can exercise the rejection
+// path without actually decompressing hundreds of megabytes.
+func flattenCellsCacheZipDataLimited(data []byte, maxSize int64) ([]Entry, error) {
 	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return nil, err
@@ -161,10 +177,16 @@ func flattenCellsCacheZipData(data []byte) ([]Entry, error) {
 		if err != nil {
 			return nil, err
 		}
-		content, err := io.ReadAll(rc)
+		// Read one byte past the limit so an oversized entry is detected
+		// (len(content) > max) without ever buffering more than max+1
+		// bytes for it.
+		content, err := io.ReadAll(io.LimitReader(rc, maxSize+1))
 		rc.Close()
 		if err != nil {
 			return nil, err
+		}
+		if int64(len(content)) > maxSize {
+			return nil, fmt.Errorf("%s: decompressed size exceeds %d bytes - refusing to extract (possible zip bomb)", f.Name, maxSize)
 		}
 		out = append(out, Entry{Name: cellsCacheDir + f.Name, Data: content})
 	}

@@ -494,6 +494,32 @@ func readClass(c *rszCursor) (*RSZClass, error) {
 
 const classArrayMarker = 0xffeeffee
 
+// maxArrayPreallocation bounds how many elements' worth of capacity
+// clampArrayPreallocation will hand to make([]Value, ...) up front.
+//
+// readArray's own bounds check compares a claimed element count against
+// remaining *bytes*, not remaining/memberSize - so for any element type
+// wider than one byte (e.g. an 8-byte U64), a claimed length can sit
+// well within that check while still being far larger than the number
+// of elements the remaining bytes could actually supply. Value is a
+// struct much larger than one byte, so preallocating a slice sized
+// directly off such a length can amplify a modest remaining-bytes
+// figure into a much larger allocation before a single element is
+// actually read (and before the eventual read failure, once the real
+// per-element cost is accounted for, is even detected). Capping the
+// preallocation and letting append grow the slice as elements are
+// actually read keeps a genuinely large, valid array cheap (amortized
+// growth) while bounding the up-front cost a single claimed length can
+// force.
+const maxArrayPreallocation = 4096
+
+func clampArrayPreallocation(length uint32) int {
+	if length > maxArrayPreallocation {
+		return maxArrayPreallocation
+	}
+	return int(length)
+}
+
 func readArray(c *rszCursor) (*RSZArray, error) {
 	posBefore := c.pos
 	c.alignUp(4)
@@ -546,7 +572,7 @@ func readArray(c *rszCursor) (*RSZArray, error) {
 		return nil, fmt.Errorf("array at offset %#x claims %d elements, more than the remaining %d bytes allow",
 			posBefore, length, c.remaining())
 	}
-	values := make([]Value, 0, length)
+	values := make([]Value, 0, clampArrayPreallocation(length))
 	for i := uint32(0); i < length; i++ {
 		if isClass {
 			cls, err := readClass(c)

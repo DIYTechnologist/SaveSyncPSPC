@@ -2,9 +2,11 @@ package garlic
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -30,8 +32,59 @@ type Client struct {
 func New(baseURL string, timeout time.Duration) *Client {
 	return &Client{
 		BaseURL: strings.TrimRight(baseURL, "/"),
-		HTTP:    &http.Client{Timeout: timeout},
+		HTTP: &http.Client{
+			Timeout:   timeout,
+			Transport: &http.Transport{DialContext: safeDialContext},
+		},
 	}
+}
+
+// isDisallowedGarlicAddr reports whether ip is one this client should
+// never connect to - link-local addresses (which includes cloud
+// metadata endpoints like 169.254.169.254) and the unspecified address.
+// Deliberately not blocking loopback: a legitimate local Garlic proxy
+// during development is a real use case this shouldn't break, and
+// loopback isn't the class of address the "no cloud metadata" concern
+// is actually about.
+func isDisallowedGarlicAddr(ip net.IP) bool {
+	return ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// safeDialContext resolves addr's host and connects only to a resolved
+// IP that passes isDisallowedGarlicAddr, checked at the moment of actual
+// connection rather than via an earlier, separate lookup. A
+// resolve-then-check-then-connect-by-hostname sequence has a real gap a
+// malicious or misbehaving DNS server can exploit ("DNS rebinding"):
+// answer with a safe IP for the check, then a different, disallowed one
+// moments later when the connection is actually made. Resolving once
+// here and dialing the specific IP literal that was just validated - not
+// the hostname again - closes that gap entirely.
+func safeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{}
+	var lastErr error
+	for _, ip := range ips {
+		if isDisallowedGarlicAddr(ip) {
+			lastErr = fmt.Errorf("refusing to contact link-local/unspecified address %s (e.g. cloud metadata endpoints); point --garlic at your PS5's LAN address", ip)
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no addresses found for %s", host)
+	}
+	return nil, lastErr
 }
 
 func (c *Client) endpoint(path string, query map[string]string) string {
@@ -215,14 +268,21 @@ func (c *Client) DownloadFile(name string) ([]byte, error) {
 	if len(raw) == 0 {
 		return nil, fmt.Errorf("Garlic returned an empty response downloading %s", name)
 	}
+	// A response that looks like JSON might be Garlic's own error wrapper
+	// rather than the requested file - but it might also just be a save
+	// file whose own content happens to be (or start with) JSON. Only
+	// treat it as an error when it actually decodes and carries an
+	// "error" key; anything else - including a legitimate JSON save, or
+	// content that merely starts with '{' without being valid JSON at
+	// all - falls through and is returned as the real file.
 	stripped := strings.TrimSpace(string(raw[:min(len(raw), 64)]))
 	if strings.Contains(ctype, "application/json") || strings.HasPrefix(stripped, "{") {
 		var value map[string]any
-		_ = json.Unmarshal(raw, &value)
-		if errValue, ok := value["error"]; ok {
-			return nil, fmt.Errorf("%v", errValue)
+		if err := json.Unmarshal(raw, &value); err == nil {
+			if errValue, ok := value["error"]; ok {
+				return nil, fmt.Errorf("%v", errValue)
+			}
 		}
-		return nil, fmt.Errorf("Garlic download failed")
 	}
 	return raw, nil
 }

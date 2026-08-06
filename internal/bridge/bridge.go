@@ -245,6 +245,27 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 	return backupDir, nil
 }
 
+// sanitizeGarlicPathComponent rejects a SaveName/Payload value that isn't
+// safe to use as a single filesystem path component. image.Payload for a
+// DynamicPayload image is chosen from filenames listed by Garlic's own
+// mount-listing response (see resolveDynamicImages) - network input from
+// the PS5 device, not something this tool generates itself - so a
+// crafted or compromised response naming a file like "../../evil.bin"
+// must not be allowed to escape the backup/output directory when later
+// joined via filepath.Join. A legitimate name is always exactly one path
+// component, so anything that doesn't round-trip through filepath.Base
+// unchanged (or is empty) is rejected outright rather than silently
+// cleaned.
+func sanitizeGarlicPathComponent(kind, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("empty Garlic %s name", kind)
+	}
+	if filepath.Base(name) != name {
+		return "", fmt.Errorf("refusing unsafe Garlic %s name %q", kind, name)
+	}
+	return name, nil
+}
+
 // resolveDynamicImages fills in any SaveName/Payload/PCFile fields the
 // engine couldn't know ahead of time (see gameapi.SaveImage's Dynamic*
 // fields), returning a fully-concrete copy of images. This runs before
@@ -265,7 +286,11 @@ func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, tit
 			if ps5SaveName == "" {
 				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
 			}
-			image.SaveName = ps5SaveName
+			sanitized, err := sanitizeGarlicPathComponent("save name", ps5SaveName)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.SaveName = sanitized
 		}
 		if image.DynamicPCFile && direction == "pc-to-ps5" {
 			pcFile, err := eng.ResolvePCFile(cfg, image, pcDir)
@@ -292,7 +317,11 @@ func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, tit
 			if resolveErr != nil {
 				return nil, fmt.Errorf("%s: %w", image.Logical, resolveErr)
 			}
-			image.Payload = payload
+			sanitized, err := sanitizeGarlicPathComponent("payload", payload)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.Payload = sanitized
 		}
 		resolved[i] = image
 	}

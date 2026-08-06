@@ -207,6 +207,38 @@ func TestResolveDynamicImagesResolvesPayloadViaMount(t *testing.T) {
 	}
 }
 
+// TestResolveDynamicImagesRejectsPathTraversalInPayload is a regression
+// test: image.Payload for a DynamicPayload image comes straight from
+// Garlic's own mount-listing response (see fakeGarlicServer) - network
+// input from the PS5 device, not something this tool generates - and
+// later gets joined via filepath.Join into backup/output paths. A
+// malicious or compromised Garlic response naming a file like
+// "../../evil.lsv" must be rejected here rather than allowed to escape
+// the intended directory on write.
+func TestResolveDynamicImagesRejectsPathTraversalInPayload(t *testing.T) {
+	server, _ := fakeGarlicServer(t, []string{"../../evil.lsv"})
+	client := garlic.New(server.URL, time.Second)
+
+	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true, DynamicPayload: true}}
+	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "u1", "sdimg_Save0002", 0, "ps5-to-pc")
+	if err == nil {
+		t.Fatal("expected a path-traversal payload name to be rejected")
+	}
+}
+
+// TestResolveDynamicImagesRejectsPathTraversalInSaveName covers the same
+// escape via --ps5-save-name: although that flag is normally the local
+// user's own trusted input, resolveDynamicImages joins it into
+// filesystem paths the same way, so it must be validated too.
+func TestResolveDynamicImagesRejectsPathTraversalInSaveName(t *testing.T) {
+	client := garlic.New("http://unused.test", time.Second)
+	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true}}
+	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "", "../../etc", 0, "ps5-to-pc")
+	if err == nil {
+		t.Fatal("expected a path-traversal save name to be rejected")
+	}
+}
+
 func TestResolveDynamicImagesResolvesPCFileOnlyForPCToPS5(t *testing.T) {
 	server, _ := fakeGarlicServer(t, []string{"save.lsv"})
 	client := garlic.New(server.URL, time.Second)
