@@ -50,20 +50,42 @@ user their save will load.
 | Direction | Format-level | Live dry-run | Live applied + in-game |
 |---|---|---|---|
 | PC → PS5 | ✅ | ⬜ Garlic went offline before this could be run | ✅ confirmed on a real PS5 with two different saves (fresh autosave, 2.5MB manual slot) - via the underlying library/manual process, not the `save-sync --apply` CLI command itself |
-| PS5 → PC | ✅ (unit-tested) | ⬜ | ⬜ never confirmed in-game; writes `0` as the embedded Steam account ID, which the game may reject |
+| PS5 → PC | ✅ (unit-tested) | ⬜ | ⬜ never confirmed in-game; shares RE3's exact conversion path, so it inherits the account-ID fix made there (see RE3 below) - worth testing now that that's resolved |
 
 **Also pending:** `save-sync --game re2 ... --apply` has never itself been run end-to-end against a live console. The conversion *library* is proven (byte-identical to saves that loaded), but the CLI plumbing around it (`--ps5-save-name` resolution, `bridge.PCToPS5`) has only been unit-tested, not exercised for a real upload.
 
 **Also known:** the global profile/settings slot (`data00-1.bin`) is refused outright by the engine - converting it was observed to crash the game at startup during investigation, so this isn't attempted.
 
+**Update (2026-08-06):** the "writes `0` as the embedded Steam account ID" caveat that used to be here is fixed - `Engine.ConvertFromPS5` now requires and forwards `--steam-id` for both RE2 and RE3, and the value is normalized to the 32-bit Steam account ID that real PC saves actually carry. Both fixes came out of the live RE3 session; see the RE3 section below for the full root cause. RE2's PS5→PC is still unconfirmed in-game but no longer has a known blocker.
+
 ## Resident Evil 3 (`re3`, engine `reengine`)
 
 | Direction | Format-level | Live dry-run | Live applied + in-game |
 |---|---|---|---|
-| PC → PS5 | ✅ real Steam saves (all 4 slots decode, valid checksums) | ✅ real Garlic, correct `flags=0x0` PS5 container produced | ⬜ never applied for real |
-| PS5 → PC | ✅ | ✅ real Garlic, correct `flags=0x3` PC container produced | ⬜ never applied for real |
+| PC → PS5 | ✅ real Steam saves (all 4 slots decode, valid checksums) | ✅ real Garlic, correct `flags=0x0` PS5 container produced | ✅ applied for real via CLI `--apply --yes` (2026-08-06), slot 0 (`sdimg_SAVESERVICE-LINE-0-0` / PC `data000.bin`); read-back confirmed byte-identical write, and the save **loaded correctly in-game** |
+| PS5 → PC | ✅ | ✅ real Garlic, correct `flags=0x3` PC container produced | ✅ root cause found and fixed (2026-08-06); installed into `data001Slot.bin` and **confirmed loading correctly in-game** (verified via the "Times Saved" counter: 1 in the pre-existing PC save vs. 2 in the PS5-derived one, matching expectations) |
 
-No known blockers - this is the most format-confirmed title without a live load test yet. Platform-identity field mapping (class `0x4a5aa7b`) was confirmed by diffing 4 real PC saves against 1 real PS5 save (multi-sample on the PC side).
+**Known, expected cosmetic quirk (not a bug, PC→PS5 only):** after a PC→PS5 apply, the PS5 save-select menu keeps showing the *previous* occupant's preview text (area/goal/character) for that slot until the game itself next writes to it - that text lives in the PS5's own save registration (`sce_sys/`), not in the payload this tool writes, and touching it would break the slot's registration. Confirmed harmless: the save content itself loaded correctly despite the stale menu text.
+
+PC→PS5 is now fully confirmed end to end. Platform-identity field mapping (class `0x4a5aa7b`) was confirmed by diffing 4 real PC saves against 1 real PS5 save (multi-sample on the PC side).
+
+### PS5→PC: the "empty slot" bug, root-caused 2026-08-06
+
+Live-tested against a real PC install (RE3 on Steam via Proton). The converted save was installed into `data001Slot.bin` (an existing slot) and into a hand-copied `data004Slot.bin` (a slot with no prior save at all) - **neither appeared in the in-game load list**, with no error of any kind. Two bugs were found, both fixed:
+
+**Bug 1 - the account ID was never forwarded.** `Engine.ConvertFromPS5` hardcoded the embedded Steam account ID to `0` instead of using `--steam-id`, even though the CLI flag and the underlying `ConvertPS5ToPC(data, steamID)` already supported it. Fixed; tested by `TestConvertFromPS5RequiresSteamIDForRE3` / `TestConvertFromPS5ForwardsSteamIDForRE3`.
+
+**Bug 2 (the actual cause) - wrong *form* of Steam ID.** A PC save's ID field holds the **32-bit Steam account ID** (the number in Steam's `userdata/<id>/` path, e.g. `11052978`), but `--steam-id` was documented as, and used as, the **64-bit SteamID64** (`76561197971318706`). The game reads that field, sees a save belonging to a different account, and **silently omits it from the load list** - no error, no corruption warning, just an apparently empty slot. This is also why the empty-slot symptom was identical for a brand-new slot and an existing one, and why it looked like a missing "slot registry".
+
+Confirmed at the byte level rather than by inference: all three real PC saves on this machine carry identical bytes at `0x18-0x20` (`24 68 18 18 f7 0a 1e 58`), our old output carried different ones, and after the fix the converted save's **entire 32-byte header is byte-identical to a real PC save's**.
+
+The fix normalizes `--steam-id` to the 32-bit account ID at a single choke point (`bridge.steamAccountID`, applied in `resolveDynamicImages`, which both the CLI and UI server pass through), so **either form is now accepted**. RE4 is unaffected either way: its Lime cipher already masks to the low 32 bits internally (`limeExponent`), and a SteamID64's low 32 bits *are* the account ID. Tested by `TestSteamAccountIDNormalizesSteamID64` and `TestResolveDynamicImagesNormalizesSteamID`.
+
+**Why PC→PS5 never hit this:** a PS5 container has no ID field at all (`HasID=false`) - account identity there lives in `sce_sys/param.sfo`. The wrong ID value simply never got written, so that direction worked despite the same flag being wrong.
+
+**Confirmed in-game (2026-08-06):** loaded correctly. Both RE3 directions are now fully verified end to end.
+
+**Separately noted (not the cause, but real):** the RSZ reader skips alignment-padding bytes without recording them and the writer re-emits zeros, so a same-offset round trip is not byte-identical (~4.4% of bytes differ, all inside alignment gaps). Real saves put non-zero bytes there. This is very likely harmless - the format's declared-size fields tell any correct parser exactly where values are, PC→PS5 works fine with zeroed padding, and gap sizes genuinely differ between the two body offsets so exact preservation isn't even well-defined across a conversion - but it is a real fidelity gap worth closing on its own merits.
 
 ## Resident Evil 4 (`re4`, engine `reengine`)
 
@@ -101,7 +123,7 @@ No cipher, no known platform-identity field to worry about - this is the structu
 
 In rough order of how close each already is:
 
-1. **RE3 PC→PS5, then PS5→PC** - most format-confirmed title with no live test at all.
+1. ~~RE3 PS5→PC~~ - **done.** Root-caused and fixed 2026-08-06 (wrong form of Steam ID embedded), confirmed loading correctly in-game. RE3 is now fully confirmed both directions.
 2. **RE4 PC→PS5, then PS5→PC** - same, plus resolves the platform-field uncertainty either way.
 3. **Subnautica and Subnautica: Below Zero, both directions** - simplest format, lowest risk.
 4. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.

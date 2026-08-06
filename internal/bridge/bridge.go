@@ -266,6 +266,26 @@ func sanitizeGarlicPathComponent(kind, name string) (string, error) {
 	return name, nil
 }
 
+// steamAccountID normalizes whatever the user passed to --steam-id into
+// the 32-bit Steam *account* ID (the number in Steam's userdata/<id>/
+// path), accepting either that or the 64-bit SteamID64.
+//
+// This distinction is not cosmetic. RE2/RE3 PC saves embed this value
+// verbatim in the container's ID field, and real saves hold the account
+// ID: writing a SteamID64 there instead produces a save the game treats
+// as belonging to a different account and silently omits from its load
+// list entirely - no error, just an apparently empty slot (confirmed
+// live on RE3, 2026-08-06; see TestCases.md).
+//
+// A SteamID64 for an individual account is 0x1100001_00000000 + the
+// account ID, so masking to the low 32 bits recovers the account ID and
+// leaves an already-32-bit value untouched. RE4's Lime cipher applies
+// this same mask internally (limeExponent), so normalizing here matches
+// what that path already does rather than changing its behaviour.
+func steamAccountID(steamID uint64) uint64 {
+	return steamID & 0xffffffff
+}
+
 // resolveDynamicImages fills in any SaveName/Payload/PCFile fields the
 // engine couldn't know ahead of time (see gameapi.SaveImage's Dynamic*
 // fields), returning a fully-concrete copy of images. This runs before
@@ -280,8 +300,9 @@ func sanitizeGarlicPathComponent(kind, name string) (string, error) {
 // not something to discover.
 func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName string, steamID uint64, direction string) ([]gameapi.SaveImage, error) {
 	resolved := make([]gameapi.SaveImage, len(images))
+	accountID := steamAccountID(steamID)
 	for i, image := range images {
-		image.SteamID = steamID
+		image.SteamID = accountID
 		if image.DynamicSaveName {
 			if ps5SaveName == "" {
 				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
