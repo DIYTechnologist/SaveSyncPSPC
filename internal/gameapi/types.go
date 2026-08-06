@@ -48,6 +48,15 @@ type SaveImage struct {
 	// save directory's actual contents (engine.ResolvePCFile) rather
 	// than assumed from config.
 	DynamicPCFile bool `json:"dynamic_pc_file"`
+
+	// SteamID is set from bridge.Options.SteamID before ConvertToPS5/
+	// ConvertFromPS5 run, for engines whose PC-side cipher is keyed off
+	// the account rather than a fixed constant (e.g. RE4's "Lime" -
+	// there is no key to embed in a profile, the account ID derives
+	// it). Zero if the run didn't supply one; engines that need it
+	// should error clearly rather than silently produce an
+	// unloadable-for-that-account save.
+	SteamID uint64 `json:"-"`
 }
 
 type ConversionResult struct {

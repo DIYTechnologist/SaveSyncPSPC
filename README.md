@@ -208,6 +208,25 @@ PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-test
 
 `--game re3` (title `PPSA03952`) works the same way, unlike RE2 in one respect worth knowing: RE3's PS5 save is completely unencrypted rather than an encrypted-no-account-ID container. Confirmed against real saves and via a live dry run in both directions; not yet confirmed loading a converted save in-game. See `TODO.md`'s "RE Engine family" section for the full breakdown of which other RE Engine titles convert and which don't yet.
 
+`--game re4` (title `PPSA07411`) needs one more flag: `--steam-id <SteamID64>`. RE4's Steam save has no fixed key at all - it uses a different cipher ("Lime") keyed off the account itself:
+
+```sh
+./bin/save-sync \
+  --garlic http://192.168.2.67:8082 \
+  --game re4 \
+  --ps5-uid 1ea2f4d9 \
+  --steam-id 11052978 \
+  --ps5-save-name sdimg_SAVESERVICE-LINE-0-0 \
+  pc-to-ps5 \
+  --pc-dir "~/.local/share/Steam/userdata/<id>/2050650/remote/win64_save" \
+  --output-dir ./converted_for_ps5 \
+  --apply \
+  --yes \
+  --force
+```
+
+Fully validated at the format level (real saves, both directions), not yet confirmed loading a converted save in-game. See `docs/dev-res4.md` for how the Lime cipher works.
+
 ### Subnautica (fixed save slot)
 
 Subnautica's PC save lives inside the game's own install directory rather than under `AppData` — point `--pc-dir` at the `SavedGames` folder itself, not a specific slot (the profile picks the slot subdirectory):

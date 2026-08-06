@@ -60,6 +60,24 @@ More details:
 - [RE Engine family findings (RE3/RE4/RE7/Village/Requiem)](../TODO.md#re-engine-family-re3re4re7villagerequiem)
 - `dev.md`'s "Resident Evil 2" section covers the shared `internal/reengine`/`TitleConfig` mechanism both RE2 and RE3 use
 
+## Resident Evil 4 (2023)
+
+- Game key: `re4`
+- Engine: `reengine` (RE Engine DSSS container), title `re4`
+- PS5 title ID: `PPSA07411`
+- Region: USA
+- PC target: Steam
+- Save slot isn't fixed - pass `--ps5-save-name` naming the Garlic slot to target; the PC-side filename for that slot is derived automatically
+- PC (Steam) side needs `--steam-id <SteamID64>` - unlike every other title here, RE4's Steam save has no fixed key at all; the account ID itself derives it (a public formula, not a secret), via a completely different cipher ("Lime") than RE2/RE3's Blowfish
+- PS5 side is plain Blowfish, same shape as RE2, with its own key found via a known-plaintext oracle sweep of the real eboot.bin
+- Fully validated against two real Steam saves (every block checksum verifies, full round trip byte-identical, correct slot IDs) and the complete PC→PS5→PC conversion round trip produces valid output; not yet confirmed loading a converted save in-game
+- Platform-identity field mapping (class `0x100e60`) is single-sample and less certain than RE2/RE3's - see caveat in the docs below
+
+More details:
+
+- [RE4 deep technical reference (Lime cipher, key discovery, CLI wiring)](dev-res4.md)
+- [RE Engine family findings (RE3/RE4/RE7/Village/Requiem)](../TODO.md#re-engine-family-re3re4re7villagerequiem)
+
 ## Subnautica
 
 - Game key: `subnautica`

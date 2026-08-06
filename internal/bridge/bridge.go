@@ -29,16 +29,26 @@ type Options struct {
 	// DynamicSaveName set; ignored otherwise (Clair's SaveName is always
 	// config-known, so this is a no-op for it).
 	PS5SaveName string
-	GamesDir    string
-	Game        string
-	TitleID     string
-	BackupRoot  string
-	PCDir       string
-	OutputDir   string
-	Force       bool
-	Install     bool
-	Apply       bool
-	Yes         bool
+	// SteamID is the Steam account ID some engines' PC-side ciphers are
+	// keyed off (e.g. RE4's "Lime": there is no fixed key at all, the
+	// account ID derives it). Required whenever the selected engine
+	// needs it (currently just reengine's "re4" title); ignored
+	// otherwise. Threaded through via gameapi.SaveImage.SteamID rather
+	// than the engine.Engine interface itself, the same way
+	// PS5SaveName flows through resolveDynamicImages instead of a
+	// dedicated parameter - avoids changing every engine's method
+	// signature for a fact only one engine currently needs.
+	SteamID    uint64
+	GamesDir   string
+	Game       string
+	TitleID    string
+	BackupRoot string
+	PCDir      string
+	OutputDir  string
+	Force      bool
+	Install    bool
+	Apply      bool
+	Yes        bool
 	// Allow names portability-gate checks to bypass for this run (see
 	// engine.CheckResult / the unreal engine's gate.go). Unknown tokens
 	// are a hard error. For pc-to-ps5, any non-empty Allow requires Apply
@@ -247,9 +257,10 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 // source. For "ps5-to-pc" the PC-side file doesn't exist yet - it's an
 // output the engine names itself (typically from the resolved Payload),
 // not something to discover.
-func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName, direction string) ([]gameapi.SaveImage, error) {
+func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName string, steamID uint64, direction string) ([]gameapi.SaveImage, error) {
 	resolved := make([]gameapi.SaveImage, len(images))
 	for i, image := range images {
+		image.SteamID = steamID
 		if image.DynamicSaveName {
 			if ps5SaveName == "" {
 				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
@@ -303,7 +314,7 @@ func PS5ToPC(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "ps5-to-pc")
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, options.SteamID, "ps5-to-pc")
 	if err != nil {
 		return err
 	}
@@ -381,7 +392,7 @@ func PCToPS5(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "pc-to-ps5")
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, options.SteamID, "pc-to-ps5")
 	if err != nil {
 		return err
 	}

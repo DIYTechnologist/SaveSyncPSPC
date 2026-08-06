@@ -178,13 +178,14 @@ func TestConvertRefusesCorruptSource(t *testing.T) {
 // retarget - shipping it unchanged would produce a save the console
 // rejects, so it must fail here instead.
 // buildPlatformBodyFor is buildPlatformBody generalized for an arbitrary
-// TitleConfig, so the same fixture shape can exercise a title whose PS5
-// side is unencrypted (RE3) as well as RE2's.
-func buildPlatformBodyFor(title TitleConfig, base int, enum int32, flag bool, slotID []byte) []byte {
+// platform class hash, so the same fixture shape can exercise a title
+// whose PS5 side is unencrypted (RE3), uses a different cipher entirely
+// on the PC side (RE4's Lime, see re4_test.go), or RE2's plain shape.
+func buildPlatformBodyFor(platformClass uint32, base int, enum int32, flag bool, slotID []byte) []byte {
 	b := &rszBuilder{base: base}
 	b.u32(0xAAAAAAAA)
 	b.u32(2)
-	b.u32(title.PlatformClass)
+	b.u32(platformClass)
 
 	b.u32(fieldPlatformEnum)
 	b.u32(uint32(FieldTypeEnum))
@@ -217,7 +218,7 @@ func TestTitleConfigConvertsUnencryptedPS5Shape(t *testing.T) {
 	title := TitleConfig{Key: KeyRE3, PlatformClass: RE3.PlatformClass, PS5Unencrypted: true}
 	slotID := []byte{0x02, 0x00, 0x00, 0x00}
 
-	pcBody := buildPlatformBodyFor(title, PCDataOffset, 3, true, slotID)
+	pcBody := buildPlatformBodyFor(title.PlatformClass, PCDataOffset, 3, true, slotID)
 	pcData, err := Build(pcBody, title.Key, BuildOptions{HasID: true, SteamID: 11052978})
 	if err != nil {
 		t.Fatal(err)

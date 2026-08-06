@@ -178,7 +178,7 @@ func fakeGarlicServer(t *testing.T, mountFiles []string) (*httptest.Server, *int
 func TestResolveDynamicImagesRequiresPS5SaveNameFlag(t *testing.T) {
 	client := garlic.New("http://unused.test", time.Second)
 	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true}}
-	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "", "", "ps5-to-pc")
+	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "", "", 0, "ps5-to-pc")
 	if err == nil {
 		t.Fatal("expected error when DynamicSaveName is set but PS5SaveName is empty")
 	}
@@ -192,7 +192,7 @@ func TestResolveDynamicImagesResolvesPayloadViaMount(t *testing.T) {
 	client := garlic.New(server.URL, time.Second)
 
 	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true, DynamicPayload: true}}
-	resolved, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "u1", "sdimg_Save0002", "ps5-to-pc")
+	resolved, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "u1", "sdimg_Save0002", 0, "ps5-to-pc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestResolveDynamicImagesResolvesPCFileOnlyForPCToPS5(t *testing.T) {
 
 	images := []gameapi.SaveImage{{Logical: "save", DynamicPCFile: true}}
 
-	resolvedForPC, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, pcDir, "u1", "sdimg_Save0002", "pc-to-ps5")
+	resolvedForPC, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, pcDir, "u1", "sdimg_Save0002", 0, "pc-to-ps5")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +223,7 @@ func TestResolveDynamicImagesResolvesPCFileOnlyForPCToPS5(t *testing.T) {
 		t.Fatalf("pc-to-ps5 PCFile = %q, want it resolved", resolvedForPC[0].PCFile)
 	}
 
-	resolvedForPS5, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, pcDir, "u1", "sdimg_Save0002", "ps5-to-pc")
+	resolvedForPS5, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, pcDir, "u1", "sdimg_Save0002", 0, "ps5-to-pc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestResolveDynamicImagesResolvesPCFileOnlyForPCToPS5(t *testing.T) {
 func TestResolveDynamicImagesLeavesStaticImagesUntouched(t *testing.T) {
 	client := garlic.New("http://unused.test", time.Second)
 	images := []gameapi.SaveImage{{Logical: "gameplay", SaveName: "sdimg_EXPEDITION0", PCFile: "EXPEDITION_0.sav", Payload: "ue4savegame.dpx.sav"}}
-	resolved, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA17599"}, images, t.TempDir(), "", "", "pc-to-ps5")
+	resolved, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA17599"}, images, t.TempDir(), "", "", 0, "pc-to-ps5")
 	if err != nil {
 		t.Fatal(err)
 	}
