@@ -14,13 +14,23 @@ import (
 // game's binary; they aren't derived from a Steam ID or any other
 // per-save value the way some other RE Engine titles' schemes are.
 //
-// Only RE2's key has been exercised against real saves. The others are
-// recorded here because they belong to the same container format and
-// cost nothing to carry, but nothing in this package has been tested
-// against those titles - treat them as unverified until they are.
+// Verified against real saves: KeyRE2 (both platforms) and KeyRE3 (real
+// Steam saves - all four slots decode with valid checksums and correct
+// embedded slot numbers). KeyRE4 was recovered from the PS5 build's own
+// eboot.bin and confirmed against a real PS5 save; see docs/dev-res2.md.
+// KeyRE7/KeyRE8 remain untested - they belong to the same container
+// family and cost nothing to carry, but treat them as unverified.
+//
+// A per-title key is not the whole story: which cipher a save uses varies
+// by title *and* platform. RE4 on Steam doesn't use Blowfish at all (it
+// uses an ElGamal+AES-OFB scheme keyed off the Steam account ID, so there
+// is no fixed key to find), while its PS5 build does - KeyRE4 is
+// PS5-only. Several titles' PS5 saves are not encrypted at all; see
+// flagsSupported and Decode below.
 var (
 	KeyRE2 = []byte(`K<>$cl%isqA|~nV4W5~3z_Q)j]5DHdB9sb{cI9Hn&Gqc-zO8O6zf`)
 	KeyRE3 = []byte(`mAz{]jeQ+uxyNH*d<Dt2kC5r=3M9RV6c$TaG[b|}^%&)En4F(Wvp`)
+	KeyRE4 = []byte(`wa9Ui_tFKa_6E_D5gVChjM69xMKDX8QxEykYKhzb4cRNLknpCZUra`)
 	KeyRE7 = []byte(`hHGb4nS653aRT29jy`)
 	KeyRE8 = []byte(`j1lL1AOR31sd4HKJS90fs`)
 )
