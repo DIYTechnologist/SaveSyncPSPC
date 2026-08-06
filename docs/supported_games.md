@@ -43,6 +43,23 @@ More details:
 - [RE2 investigation log](ressave.md)
 - [RE2 deep technical reference (container format, RSZ, and the full eboot.bin disassembly)](dev-res2.md)
 
+## Resident Evil 3 (2020)
+
+- Game key: `re3`
+- Engine: `reengine` (RE Engine DSSS container), title `re3`
+- PS5 title ID: `PPSA03952`
+- Region: USA
+- PC target: Steam
+- Save slot isn't fixed - pass `--ps5-save-name` naming the Garlic slot to target; the PC-side filename for that slot is derived automatically
+- Different container shape from RE2 on both sides: PC is plain Blowfish+HasID like RE2 (confirmed against 4 real saves), but the **PS5 save is unencrypted** (`flags=0x0`, no cipher at all) rather than encrypted-no-ID
+- Platform-identity fields live in a different, title-specific class (`0x4a5aa7b`) than RE2's, but the same two field hashes RE2 uses - confirmed by diffing real PC/PS5 saves
+- Confirmed via a live CLI dry run (both directions) against real Garlic, output re-parses correctly on each side; not yet confirmed loading a converted save in-game
+
+More details:
+
+- [RE Engine family findings (RE3/RE4/RE7/Village/Requiem)](../TODO.md#re-engine-family-re3re4re7villagerequiem)
+- `dev.md`'s "Resident Evil 2" section covers the shared `internal/reengine`/`TitleConfig` mechanism both RE2 and RE3 use
+
 ## Subnautica
 
 - Game key: `subnautica`

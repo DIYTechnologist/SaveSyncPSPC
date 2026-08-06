@@ -15,6 +15,7 @@ const prefix = "sdimg_SAVESERVICE-LINE-0-"
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	raw := json.RawMessage(`{
+		"title": "re2",
 		"save_name_prefix": "` + prefix + `",
 		"images": [{"logical":"save","label":"Save","dynamic_save_name":true,"dynamic_payload":true,"dynamic_pc_file":true}]
 	}`)
@@ -27,14 +28,27 @@ func testConfig(t *testing.T) Config {
 
 func TestParseConfigRequiresPrefixAndOneImage(t *testing.T) {
 	for _, tc := range []struct{ name, raw string }{
-		{"no prefix", `{"images":[{"logical":"save"}]}`},
-		{"no images", `{"save_name_prefix":"p_"}`},
-		{"two images", `{"save_name_prefix":"p_","images":[{"logical":"a"},{"logical":"b"}]}`},
-		{"image without logical", `{"save_name_prefix":"p_","images":[{"label":"x"}]}`},
+		{"no prefix", `{"title":"re2","images":[{"logical":"save"}]}`},
+		{"no title", `{"save_name_prefix":"p_","images":[{"logical":"save"}]}`},
+		{"unknown title", `{"title":"re999","save_name_prefix":"p_","images":[{"logical":"save"}]}`},
+		{"no images", `{"title":"re2","save_name_prefix":"p_"}`},
+		{"two images", `{"title":"re2","save_name_prefix":"p_","images":[{"logical":"a"},{"logical":"b"}]}`},
+		{"image without logical", `{"title":"re2","save_name_prefix":"p_","images":[{"label":"x"}]}`},
 	} {
 		if _, err := New().ParseConfig(json.RawMessage(tc.raw)); err == nil {
 			t.Errorf("%s: expected an error", tc.name)
 		}
+	}
+}
+
+func TestParseConfigAcceptsRE3(t *testing.T) {
+	raw := json.RawMessage(`{
+		"title": "re3",
+		"save_name_prefix": "` + prefix + `",
+		"images": [{"logical":"save","label":"Save","dynamic_save_name":true,"dynamic_payload":true,"dynamic_pc_file":true}]
+	}`)
+	if _, err := New().ParseConfig(raw); err != nil {
+		t.Fatalf("expected re3 to be a valid title, got: %v", err)
 	}
 }
 
@@ -188,7 +202,7 @@ func TestImagesCarriesDynamicFlags(t *testing.T) {
 }
 
 func TestInspectRejectsNonDSSSPayload(t *testing.T) {
-	v := New().Inspect(nil, "save", []byte("not a save at all"), 0, nil)
+	v := New().Inspect(testConfig(t), "save", []byte("not a save at all"), 0, nil)
 	if v.Portable {
 		t.Error("garbage should not be portable")
 	}

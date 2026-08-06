@@ -12,9 +12,9 @@ import (
 // field alignment is computed in file coordinates.
 func buildPlatformBody(base int, enum int32, flag bool, slotID []byte) []byte {
 	b := &rszBuilder{base: base}
-	b.u32(0xAAAAAAAA)    // object outer hash
-	b.u32(2)             // class field count
-	b.u32(platformClass) // class hash
+	b.u32(0xAAAAAAAA)        // object outer hash
+	b.u32(2)                 // class field count
+	b.u32(RE2.PlatformClass) // class hash
 
 	// Enum field, declared size 4.
 	b.u32(fieldPlatformEnum)
@@ -64,7 +64,7 @@ func platformValuesOf(t *testing.T, data []byte) (int64, bool) {
 		t.Fatal(err)
 	}
 	for _, o := range objs {
-		if o.Class.Hash != platformClass {
+		if o.Class.Hash != RE2.PlatformClass {
 			continue
 		}
 		var e int64
@@ -177,6 +177,115 @@ func TestConvertRefusesCorruptSource(t *testing.T) {
 // doesn't carry the platform fields this converter knows how to
 // retarget - shipping it unchanged would produce a save the console
 // rejects, so it must fail here instead.
+// buildPlatformBodyFor is buildPlatformBody generalized for an arbitrary
+// TitleConfig, so the same fixture shape can exercise a title whose PS5
+// side is unencrypted (RE3) as well as RE2's.
+func buildPlatformBodyFor(title TitleConfig, base int, enum int32, flag bool, slotID []byte) []byte {
+	b := &rszBuilder{base: base}
+	b.u32(0xAAAAAAAA)
+	b.u32(2)
+	b.u32(title.PlatformClass)
+
+	b.u32(fieldPlatformEnum)
+	b.u32(uint32(FieldTypeEnum))
+	b.alignTo(4)
+	b.u32(4)
+	b.alignTo(4)
+	b.u32(uint32(enum))
+
+	b.u32(fieldPlatformBool)
+	b.u32(uint32(FieldTypeBoolean))
+	b.alignTo(4)
+	b.u32(1)
+	var v byte
+	if flag {
+		v = 1
+	}
+	b.buf.WriteByte(v)
+	b.alignTo(4)
+
+	b.buf.Write(slotID)
+	return b.buf.Bytes()
+}
+
+// TestTitleConfigConvertsUnencryptedPS5Shape exercises a title whose PS5
+// build is unencrypted (RE3's confirmed shape) end to end: PC (encrypted,
+// HasID) -> PS5 (flags=0, body at 0xc, no key needed to read it) -> back
+// to PC. Confirmed separately against real RE3 saves (see docs/dev.md);
+// this fixture pins the mechanism with fast, synthetic data.
+func TestTitleConfigConvertsUnencryptedPS5Shape(t *testing.T) {
+	title := TitleConfig{Key: KeyRE3, PlatformClass: RE3.PlatformClass, PS5Unencrypted: true}
+	slotID := []byte{0x02, 0x00, 0x00, 0x00}
+
+	pcBody := buildPlatformBodyFor(title, PCDataOffset, 3, true, slotID)
+	pcData, err := Build(pcBody, title.Key, BuildOptions{HasID: true, SteamID: 11052978})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ps5, err := title.ConvertPCToPS5(pcData)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The unencrypted shape needs no key at all to read back.
+	dec, err := Decode(ps5, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.HasID {
+		t.Error("PS5 saves carry no ID field")
+	}
+	if dec.DataOffset != ps5UnencryptedOffset {
+		t.Errorf("body at %#x, want %#x", dec.DataOffset, ps5UnencryptedOffset)
+	}
+	if !dec.HashValid {
+		t.Error("checksum invalid")
+	}
+	if got := dec.Body[len(dec.Body)-len(slotID):]; !bytes.Equal(got, slotID) {
+		t.Errorf("slot id = % x, want % x", got, slotID)
+	}
+	objs, err := ReadRSZObjects(dec.Body, dec.DataOffset)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundEnum int64
+	var foundFlag bool
+	for _, o := range objs {
+		if o.Class.Hash != title.PlatformClass {
+			continue
+		}
+		for _, f := range o.Class.Fields {
+			switch f.Hash {
+			case fieldPlatformEnum:
+				foundEnum = f.Value.Int
+			case fieldPlatformBool:
+				foundFlag = f.Value.Bool
+			}
+		}
+	}
+	if foundEnum != ps5Platform.enum || foundFlag != ps5Platform.flag {
+		t.Errorf("platform fields = (%d, %v), want (%d, %v)", foundEnum, foundFlag, ps5Platform.enum, ps5Platform.flag)
+	}
+
+	back, err := title.ConvertPS5ToPC(ps5, 11052978)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backDec, err := Decode(back, title.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !backDec.HasID || backDec.SteamID != 11052978 {
+		t.Errorf("got HasID=%v SteamID=%d", backDec.HasID, backDec.SteamID)
+	}
+	if backDec.DataOffset != PCDataOffset {
+		t.Errorf("body at %#x, want %#x", backDec.DataOffset, PCDataOffset)
+	}
+	if got := backDec.Body[len(backDec.Body)-len(slotID):]; !bytes.Equal(got, slotID) {
+		t.Errorf("slot id = % x, want % x", got, slotID)
+	}
+}
+
 func TestConvertRefusesUnrecognisedLayout(t *testing.T) {
 	b := &rszBuilder{base: PCDataOffset}
 	b.u32(0xAAAAAAAA)

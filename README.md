@@ -206,6 +206,8 @@ Like BG3, RE2 save slots aren't fixed — pass `--ps5-save-name` naming the Garl
 
 PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-tested but not yet confirmed in-game. The global profile/settings slot (`data00-1.bin`) is refused outright — converting it crashed the game at startup. See `docs/ressave.md` for the full format writeup.
 
+`--game re3` (title `PPSA03952`) works the same way, unlike RE2 in one respect worth knowing: RE3's PS5 save is completely unencrypted rather than an encrypted-no-account-ID container. Confirmed against real saves and via a live dry run in both directions; not yet confirmed loading a converted save in-game. See `TODO.md`'s "RE Engine family" section for the full breakdown of which other RE Engine titles convert and which don't yet.
+
 ### Subnautica (fixed save slot)
 
 Subnautica's PC save lives inside the game's own install directory rather than under `AppData` — point `--pc-dir` at the `SavedGames` folder itself, not a specific slot (the profile picks the slot subdirectory):

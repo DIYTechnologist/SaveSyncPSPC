@@ -44,13 +44,25 @@ type ImageConfig struct {
 	DynamicPCFile   bool   `json:"dynamic_pc_file"`
 }
 
+// titles maps a profile's "title" value to the per-title format facts
+// (key, platform-identity class, PS5 container shape) in
+// internal/reengine. Adding a new title means adding a TitleConfig there
+// and a line here - no other code in this package is title-specific.
+var titles = map[string]re.TitleConfig{
+	"re2": re.RE2,
+	"re3": re.RE3,
+}
+
 // Config is the engine_config block for a "reengine" profile.
 type Config struct {
 	// SaveNamePrefix is the fixed part of this title's Garlic save names,
 	// e.g. "sdimg_SAVESERVICE-LINE-0-" for RE2; whatever follows it
 	// identifies the slot.
-	SaveNamePrefix string        `json:"save_name_prefix"`
-	Images         []ImageConfig `json:"images"`
+	SaveNamePrefix string `json:"save_name_prefix"`
+	// Title selects this profile's format facts from titles above
+	// (currently "re2" or "re3").
+	Title  string        `json:"title"`
+	Images []ImageConfig `json:"images"`
 }
 
 type Engine struct{}
@@ -70,6 +82,9 @@ func (Engine) ParseConfig(raw json.RawMessage) (any, error) {
 	}
 	if cfg.SaveNamePrefix == "" {
 		return nil, fmt.Errorf("reengine engine_config requires save_name_prefix")
+	}
+	if _, ok := titles[cfg.Title]; !ok {
+		return nil, fmt.Errorf("reengine engine_config: unknown or missing title %q", cfg.Title)
 	}
 	if len(cfg.Images) != 1 {
 		return nil, fmt.Errorf("reengine engine_config needs exactly one image, got %d", len(cfg.Images))
@@ -200,8 +215,14 @@ const (
 // Inspect checks that a payload is a DSSS save this engine can read.
 // Both checks are tier-3: a payload failing either isn't the thing the
 // engine expects at all, so neither is overridable.
-func (Engine) Inspect(_ any, logical string, payload []byte, _ engine.Side, _ map[string]bool) engine.Verdict {
-	dec, err := re.Decode(payload, re.KeyRE2)
+func (Engine) Inspect(cfgAny any, logical string, payload []byte, side engine.Side, _ map[string]bool) engine.Verdict {
+	cfg := cfgAny.(Config)
+	title := titles[cfg.Title]
+	key := title.Key
+	if side == engine.SidePS5 && title.PS5Unencrypted {
+		key = nil
+	}
+	dec, err := re.Decode(payload, key)
 	if err != nil {
 		return engine.Verdict{
 			Tier: engine.TierWrongFormat,
@@ -256,8 +277,9 @@ func expectedSlotID(token string) (int32, bool) {
 // checkSlot refuses a conversion whose source save belongs to a
 // different slot than the container it would be written into. The slot
 // number is baked into the save, so a mismatch produces a file the
-// console will not accept.
-func checkSlot(cfg Config, image gameapi.SaveImage, data []byte) error {
+// console will not accept. key must match data's own side (nil for an
+// unencrypted-PS5 title's PS5 payload).
+func checkSlot(cfg Config, image gameapi.SaveImage, data, key []byte) error {
 	token, err := slotToken(cfg, image.SaveName)
 	if err != nil {
 		return err
@@ -266,7 +288,7 @@ func checkSlot(cfg Config, image gameapi.SaveImage, data []byte) error {
 	if !ok {
 		return fmt.Errorf("slot %q isn't a recognised slot name", token)
 	}
-	dec, err := re.Decode(data, re.KeyRE2)
+	dec, err := re.Decode(data, key)
 	if err != nil {
 		return err
 	}
@@ -294,14 +316,15 @@ func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string,
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: PS5 save slot was not resolved (pass --ps5-save-name)", image.Logical)
 	}
 
+	title := titles[cfg.Title]
 	pcData, err := os.ReadFile(filepath.Join(pcDir, image.PCFile))
 	if err != nil {
 		return gameapi.ConversionResult{}, err
 	}
-	if err := checkSlot(cfg, image, pcData); err != nil {
+	if err := checkSlot(cfg, image, pcData, title.Key); err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
-	converted, err := re.ConvertPCToPS5(pcData, re.KeyRE2)
+	converted, err := title.ConvertPCToPS5(pcData)
 	if err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.PCFile, err)
 	}
@@ -327,13 +350,18 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 	if !ok {
 		return gameapi.ConversionResult{}, fmt.Errorf("missing PS5 payload for %s", image.Logical)
 	}
-	if err := checkSlot(cfg, image, data); err != nil {
+	title := titles[cfg.Title]
+	ps5Key := title.Key
+	if title.PS5Unencrypted {
+		ps5Key = nil
+	}
+	if err := checkSlot(cfg, image, data, ps5Key); err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
 
 	// A PC save embeds the Steam account id. We don't know it here, and
 	// the source (a PS5 save) doesn't carry one, so it's left zero.
-	converted, err := re.ConvertPS5ToPC(data, re.KeyRE2, 0)
+	converted, err := title.ConvertPS5ToPC(data, 0)
 	if err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
