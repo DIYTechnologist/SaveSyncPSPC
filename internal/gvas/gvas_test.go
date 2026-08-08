@@ -3,6 +3,7 @@ package gvas_test
 import (
 	"bytes"
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"savesyncpspc/internal/gvas"
@@ -33,6 +34,69 @@ func syntheticGVAS(saveClass string, payload []byte, packageUE4 uint32) []byte {
 	buf.WriteByte(0)
 	buf.Write(payload)
 	return buf.Bytes()
+}
+
+// gvasHeaderUpToEngineString builds a valid GVAS header up through the
+// engine string field, for tests that need to inject a malformed value
+// at a specific field beyond that point.
+func gvasHeaderPrefix(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	buf := new(bytes.Buffer)
+	buf.WriteString("GVAS")
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(binary.Write(buf, binary.LittleEndian, uint32(3)))     // saveVersion
+	must(binary.Write(buf, binary.LittleEndian, uint32(522)))   // packageUE4
+	must(binary.Write(buf, binary.LittleEndian, uint32(1008)))  // packageUE5
+	must(binary.Write(buf, binary.LittleEndian, uint16(5)))     // engineMajor
+	must(binary.Write(buf, binary.LittleEndian, uint16(4)))     // engineMinor
+	must(binary.Write(buf, binary.LittleEndian, uint16(4)))     // enginePatch
+	must(binary.Write(buf, binary.LittleEndian, uint32(12345))) // engineBuild
+	return buf
+}
+
+// TestParseRejectsOversizedCustomVersionCount is a regression test: a
+// customCount whose byte length (customCount*20) exceeds the file's own
+// size must be rejected cleanly. Before this check was widened to int64
+// arithmetic, int(customCount)*20 could wrap around on a 32-bit build
+// for a large enough customCount, bypassing the bounds check entirely
+// instead of failing loudly (this project only ships 64-bit binaries
+// today, so the wraparound itself isn't reachable in practice, but the
+// bounds check should reject an oversized count on any platform).
+func TestParseRejectsOversizedCustomVersionCount(t *testing.T) {
+	buf := gvasHeaderPrefix(t)
+	buf.Write(fstring("++UE5+Release-5.4"))
+	if err := binary.Write(buf, binary.LittleEndian, uint32(3)); err != nil { // customFormat
+		t.Fatal(err)
+	}
+	if err := binary.Write(buf, binary.LittleEndian, uint32(0xFFFFFFFF)); err != nil { // customCount - malicious
+		t.Fatal(err)
+	}
+
+	if _, err := gvas.Parse(buf.Bytes(), "malicious"); err == nil {
+		t.Fatal("expected an oversized custom version count to be rejected")
+	}
+}
+
+// TestParseRejectsHugeNegativeStringLength pins the exact overflow edge
+// case a UTF-16 fstring length of math.MinInt32 used to risk: negating
+// it in 32-bit arithmetic overflows back to itself (still negative), and
+// doubling that could wrap to a small or negative byte count on a
+// 32-bit build. The fix computes in int64, which has room for int32's
+// full range, and must reject this length regardless of platform.
+func TestParseRejectsHugeNegativeStringLength(t *testing.T) {
+	buf := gvasHeaderPrefix(t)
+	if err := binary.Write(buf, binary.LittleEndian, int32(math.MinInt32)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := gvas.Parse(buf.Bytes(), "malicious"); err == nil {
+		t.Fatal("expected a huge negative string length to be rejected")
+	}
 }
 
 func TestParseFindsPropertiesOffsetAndClass(t *testing.T) {

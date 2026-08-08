@@ -109,3 +109,66 @@ func TestMountByNameMountsWithoutUnmounting(t *testing.T) {
 		t.Fatal("MountByName should not have called unmount")
 	}
 }
+
+// TestDownloadFileAllowsJSONShapedSaveContent is a regression test: a
+// response that merely looks like JSON (matches the content-type sniff
+// or starts with '{') isn't necessarily Garlic's own error wrapper - it
+// could be a save file whose own content happens to be JSON. Only a
+// response that actually decodes with an "error" key is a real error;
+// anything else must be returned as the file, not rejected.
+func TestDownloadFileAllowsJSONShapedSaveContent(t *testing.T) {
+	body := `{"version":2,"gameTime":15,"session":"abc"}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, body)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	data, err := client.DownloadFile("gameinfo.json")
+	if err != nil {
+		t.Fatalf("expected a JSON-shaped save file to download successfully, got: %v", err)
+	}
+	if string(data) != body {
+		t.Fatalf("got %q, want %q", data, body)
+	}
+}
+
+// TestDownloadFileRejectsGenuineGarlicError covers the case the
+// content-type/prefix sniff exists for: Garlic's own JSON error wrapper
+// must still be rejected.
+func TestDownloadFileRejectsGenuineGarlicError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"error":"file not found"}`)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	if _, err := client.DownloadFile("missing.bin"); err == nil {
+		t.Fatal("expected a genuine Garlic error response to be rejected")
+	} else if !strings.Contains(err.Error(), "file not found") {
+		t.Fatalf("expected the error message to surface Garlic's reason, got: %v", err)
+	}
+}
+
+// TestDownloadFileAllowsBraceLeadingBinaryContent covers content whose
+// first byte happens to be '{' without being valid JSON at all - the
+// prefix sniff alone must not be enough to reject it.
+func TestDownloadFileAllowsBraceLeadingBinaryContent(t *testing.T) {
+	body := []byte("{not actually json, just happens to start with a brace")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Write(body)
+	}))
+	defer server.Close()
+
+	client := New(server.URL, time.Second)
+	data, err := client.DownloadFile("data000.bin")
+	if err != nil {
+		t.Fatalf("expected non-JSON content to download successfully, got: %v", err)
+	}
+	if string(data) != string(body) {
+		t.Fatalf("got %q, want %q", data, body)
+	}
+}

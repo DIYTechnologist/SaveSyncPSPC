@@ -207,6 +207,38 @@ func TestResolveDynamicImagesResolvesPayloadViaMount(t *testing.T) {
 	}
 }
 
+// TestResolveDynamicImagesRejectsPathTraversalInPayload is a regression
+// test: image.Payload for a DynamicPayload image comes straight from
+// Garlic's own mount-listing response (see fakeGarlicServer) - network
+// input from the PS5 device, not something this tool generates - and
+// later gets joined via filepath.Join into backup/output paths. A
+// malicious or compromised Garlic response naming a file like
+// "../../evil.lsv" must be rejected here rather than allowed to escape
+// the intended directory on write.
+func TestResolveDynamicImagesRejectsPathTraversalInPayload(t *testing.T) {
+	server, _ := fakeGarlicServer(t, []string{"../../evil.lsv"})
+	client := garlic.New(server.URL, time.Second)
+
+	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true, DynamicPayload: true}}
+	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "u1", "sdimg_Save0002", 0, "ps5-to-pc")
+	if err == nil {
+		t.Fatal("expected a path-traversal payload name to be rejected")
+	}
+}
+
+// TestResolveDynamicImagesRejectsPathTraversalInSaveName covers the same
+// escape via --ps5-save-name: although that flag is normally the local
+// user's own trusted input, resolveDynamicImages joins it into
+// filesystem paths the same way, so it must be validated too.
+func TestResolveDynamicImagesRejectsPathTraversalInSaveName(t *testing.T) {
+	client := garlic.New("http://unused.test", time.Second)
+	images := []gameapi.SaveImage{{Logical: "save", DynamicSaveName: true}}
+	_, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA18463"}, images, t.TempDir(), "", "../../etc", 0, "ps5-to-pc")
+	if err == nil {
+		t.Fatal("expected a path-traversal save name to be rejected")
+	}
+}
+
 func TestResolveDynamicImagesResolvesPCFileOnlyForPCToPS5(t *testing.T) {
 	server, _ := fakeGarlicServer(t, []string{"save.lsv"})
 	client := garlic.New(server.URL, time.Second)
@@ -261,4 +293,48 @@ func mustRead(t *testing.T, path string) []byte {
 		t.Fatal(err)
 	}
 	return data
+}
+
+// TestSteamAccountIDNormalizesSteamID64 pins the fix for a live-confirmed
+// failure (RE3, 2026-08-06): RE2/RE3 PC saves embed the 32-bit Steam
+// account id, and a save carrying a SteamID64 there instead is silently
+// omitted from the game's load list - an apparently empty slot, with no
+// error anywhere to explain it. --steam-id accepts either form, so this
+// normalization is what makes both produce the value real saves hold.
+func TestSteamAccountIDNormalizesSteamID64(t *testing.T) {
+	const accountID = uint64(11052978)
+	// SteamID64 for an individual account: 0x1100001_00000000 + account id.
+	const steamID64 = uint64(76561197960265728) + accountID
+
+	for _, tc := range []struct {
+		name  string
+		input uint64
+		want  uint64
+	}{
+		{"SteamID64 is reduced to its account id", steamID64, accountID},
+		{"an account id is left alone", accountID, accountID},
+		{"zero stays zero so 'unset' stays detectable", 0, 0},
+	} {
+		if got := steamAccountID(tc.input); got != tc.want {
+			t.Errorf("%s: steamAccountID(%d) = %d, want %d", tc.name, tc.input, got, tc.want)
+		}
+	}
+}
+
+// TestResolveDynamicImagesNormalizesSteamID checks the normalization is
+// actually wired into the path engines receive, not just available as a
+// helper - resolveDynamicImages is the single choke point both the CLI
+// and the UI server pass through.
+func TestResolveDynamicImagesNormalizesSteamID(t *testing.T) {
+	client := garlic.New("http://unused.test", time.Second)
+	images := []gameapi.SaveImage{{Logical: "save", SaveName: "sdimg_EXPEDITION0", PCFile: "x.sav", Payload: "y.sav"}}
+	const steamID64 = uint64(76561197971318706)
+
+	resolved, err := resolveDynamicImages(client, larian.New(), nil, []string{"PPSA17599"}, images, t.TempDir(), "", "", steamID64, "pc-to-ps5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved[0].SteamID != 11052978 {
+		t.Fatalf("SteamID = %d, want it normalized to the 32-bit account id 11052978", resolved[0].SteamID)
+	}
 }

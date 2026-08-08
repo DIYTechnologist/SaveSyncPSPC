@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"savesyncpspc/internal/bridge"
@@ -21,6 +22,18 @@ import (
 	"savesyncpspc/internal/pcpath"
 	"savesyncpspc/internal/util"
 )
+
+// runMu serializes /api/run's actual conversion work (bridge.PS5ToPC/
+// PCToPS5). Without it, two concurrent runs - a double-clicked button,
+// or two browser tabs - race on the same output/backup directories:
+// bridge.PrepareOutputDir deletes and recreates --output-dir, so an
+// interleaved RemoveAll/MkdirAll from a second run can corrupt or lose
+// the first run's in-progress output. Package-level rather than a
+// Server field: Server's methods all use value receivers (copied on
+// every call), so a mutex living in the struct would just be copied
+// too, not shared - a package-level var is the simplest correct fix for
+// a process that only ever runs one Server anyway.
+var runMu sync.Mutex
 
 type Server struct {
 	GamesDir string
@@ -308,6 +321,7 @@ func (s Server) apiRun(w http.ResponseWriter, r *http.Request) {
 			buf.WriteByte('\n')
 		},
 	}
+	runMu.Lock()
 	switch fmt.Sprint(req["direction"]) {
 	case "ps5-to-pc":
 		err = bridge.PS5ToPC(options)
@@ -316,6 +330,7 @@ func (s Server) apiRun(w http.ResponseWriter, r *http.Request) {
 	default:
 		err = fmt.Errorf("unknown direction: %v", req["direction"])
 	}
+	runMu.Unlock()
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return

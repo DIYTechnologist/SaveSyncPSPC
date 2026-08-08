@@ -386,6 +386,18 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 		return convertRE4FromPS5(cfg, image, data)
 	}
 
+	// A PC save embeds the Steam account id, and the source (a PS5 save)
+	// doesn't carry one - it has to come from the caller. The game
+	// silently omits a save whose embedded id isn't the loading
+	// account's from its load list, so getting this wrong looks like an
+	// empty slot rather than an error (see TestCases.md). Checked before
+	// touching data at all, same as RE4's equivalent check in
+	// convertRE4FromPS5, so a missing --steam-id fails fast rather than
+	// after a wasted decode.
+	if image.SteamID == 0 {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: converting to this game's Steam save format needs the account that will load it - pass --steam-id", image.Logical)
+	}
+
 	title := titles[cfg.Title]
 	ps5Key := title.Key
 	if title.PS5Unencrypted {
@@ -395,9 +407,7 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
 
-	// A PC save embeds the Steam account id. We don't know it here, and
-	// the source (a PS5 save) doesn't carry one, so it's left zero.
-	converted, err := title.ConvertPS5ToPC(data, 0)
+	converted, err := title.ConvertPS5ToPC(data, image.SteamID)
 	if err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
@@ -416,7 +426,7 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 		Manifest: map[string]any{
 			"ps5_save": image.SaveName,
 			"pc_file":  outName,
-			"note":     "PS5->PC has not been confirmed in-game. The embedded Steam account id is written as 0, which the game may reject; if so it needs the real id of the account that will load the save.",
+			"note":     "The embedded Steam account id is the --steam-id passed for this run, normalized to the 32-bit account id. It must be the account that will load the save: the game silently omits a save belonging to another account from its load list.",
 		},
 		Warnings: []string{
 			"PS5->PC conversion has never been verified on a real PC install - back up the PC save directory first.",
