@@ -93,10 +93,12 @@ The fix normalizes `--steam-id` to the 32-bit account ID at a single choke point
 
 | Direction | Format-level | Live dry-run | Live applied + in-game |
 |---|---|---|---|
-| PC → PS5 | ✅ real Steam saves (Lime decrypt/encrypt round trip, checksums verify) | ✅ real Garlic, correct `flags=0x1` PS5 container produced | ⬜ never applied for real |
-| PS5 → PC | ✅ | ✅ real Garlic, correct `flags=0x10` Lime container produced | ⬜ never applied for real |
+| PC → PS5 | ✅ real Steam saves (Lime decrypt/encrypt round trip, checksums verify) | ✅ real Garlic, correct `flags=0x1` PS5 container produced | ✅ applied for real via CLI `--apply --yes` (2026-08-08), Steam Deck `data000.bin` → PS5 slot `sdimg_SAVESERVICE-LINE-0-0`; read-back from Garlic confirmed byte-identical write, and the save **loaded correctly in-game** |
+| PS5 → PC | ✅ | ✅ real Garlic, correct `flags=0x10` Lime container produced | ✅ confirmed in-game on a real Steam Deck (2026-08-08), PS5 slot `sdimg_SAVESERVICE-LINE-0-0` → `data000.bin` |
 
-**Caveat carried into any live test:** the platform-identity field mapping (class `0x100e60`, enum PC=5/PS5=2) was found from a **single real sample per platform**, unlike RE3's multi-sample confirmation - and the boolean field in that class read `false` on *both* sides in the one sample checked, so it may not even be platform-discriminating for RE4. A live load test is the most direct way to find out whether the current mapping is right. See `docs/dev-res4.md`.
+**Update (2026-08-08):** RE4 is now fully confirmed end to end, both directions, in-game. This also resolves the platform-field mapping uncertainty below - the existing `0x100e60` mapping is correct as-is, no fix needed.
+
+**Caveat (resolved 2026-08-08):** the platform-identity field mapping (class `0x100e60`, enum PC=5/PS5=2) was found from a **single real sample per platform**, unlike RE3's multi-sample confirmation - and the boolean field in that class read `false` on *both* sides in the one sample checked, so it wasn't certain to be platform-discriminating. Both live directions loading correctly confirms it's right as-is. See `docs/dev-res4.md`.
 
 ## Subnautica (`subnautica`, engine `unityblb`)
 
@@ -127,7 +129,7 @@ In rough order of how close each already is:
 
 1. ~~RE3 PS5→PC~~ - **done.** Root-caused and fixed 2026-08-06 (wrong form of Steam ID embedded), confirmed loading correctly in-game. RE3 is now fully confirmed both directions.
 2. ~~RE2 PS5→PC, live~~ - **done.** Confirmed loading correctly in-game on a real Steam Deck (2026-08-08).
-3. **RE4 PC→PS5, then PS5→PC** - same, plus resolves the platform-field uncertainty either way.
+3. ~~RE4, both directions~~ - **done.** Both confirmed loading correctly in-game on a real Steam Deck/PS5 (2026-08-08); also resolves the platform-field mapping uncertainty (`0x100e60` mapping confirmed correct as-is).
 4. **Subnautica and Subnautica: Below Zero, both directions** - simplest format, lowest risk.
 5. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.
 6. **BG3 diagnostic** (duplicate-folder test, no code/no upload) - not a "live test" of a conversion, but the next real step before BG3's PS5→PC bug can even be debugged further.
