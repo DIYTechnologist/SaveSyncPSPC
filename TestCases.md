@@ -50,13 +50,15 @@ user their save will load.
 | Direction | Format-level | Live dry-run | Live applied + in-game |
 |---|---|---|---|
 | PC → PS5 | ✅ | ⬜ Garlic went offline before this could be run | ✅ confirmed on a real PS5 with two different saves (fresh autosave, 2.5MB manual slot) - via the underlying library/manual process, not the `save-sync --apply` CLI command itself |
-| PS5 → PC | ✅ (unit-tested) | ⬜ | ⬜ never confirmed in-game; shares RE3's exact conversion path, so it inherits the account-ID fix made there (see RE3 below) - worth testing now that that's resolved |
+| PS5 → PC | ✅ (unit-tested) | ✅ real Garlic | ✅ confirmed in-game on a real Steam Deck (2026-08-08), slot `sdimg_SAVESERVICE-LINE-0-1Slot` → `data001Slot.bin`; shares RE3's exact conversion path and inherits the account-ID fix made there (see RE3 below) |
 
 **Also pending:** `save-sync --game re2 ... --apply` has never itself been run end-to-end against a live console. The conversion *library* is proven (byte-identical to saves that loaded), but the CLI plumbing around it (`--ps5-save-name` resolution, `bridge.PCToPS5`) has only been unit-tested, not exercised for a real upload.
 
 **Also known:** the global profile/settings slot (`data00-1.bin`) is refused outright by the engine - converting it was observed to crash the game at startup during investigation, so this isn't attempted.
 
-**Update (2026-08-06):** the "writes `0` as the embedded Steam account ID" caveat that used to be here is fixed - `Engine.ConvertFromPS5` now requires and forwards `--steam-id` for both RE2 and RE3, and the value is normalized to the 32-bit Steam account ID that real PC saves actually carry. Both fixes came out of the live RE3 session; see the RE3 section below for the full root cause. RE2's PS5→PC is still unconfirmed in-game but no longer has a known blocker.
+**Also known (found 2026-08-06 while picking a test slot):** RE2's "extra mode" saves (Ghost Survivors/4th Survivor, slot `21Slot`, metadata string "System saved data (extra)") use a different platform-identity class (`0x3f25bafa`) than normal story saves (`0x8b7dd7a1`, the configured `RE2.PlatformClass`), and it appears to carry only the platform enum field, not the boolean field `retargetPlatform` also expects. The existing `patched != 2` strict check in `internal/reengine/convert.go` correctly refuses to convert this save type rather than silently producing a bad one - not a bug, just an unsupported save type for now. Worth a TODO if extra-mode saves matter.
+
+**Update (2026-08-08):** RE2 PS5→PC is now fully confirmed end to end. Live-tested against a real Steam Deck install: pulled `sdimg_SAVESERVICE-LINE-0-1Slot` from Garlic, converted with `--steam-id 11052978`, byte-verified the header/checksum, installed over `data001Slot.bin` (backing up the original first), and **confirmed loading correctly in-game**. The "writes `0` as the embedded Steam account ID" caveat that used to be here was fixed during the RE3 session (2026-08-06) - `Engine.ConvertFromPS5` now requires and forwards `--steam-id` for both RE2 and RE3, normalized to the 32-bit Steam account ID real PC saves carry; see the RE3 section below for the full root cause.
 
 ## Resident Evil 3 (`re3`, engine `reengine`)
 
@@ -124,9 +126,9 @@ No cipher, no known platform-identity field to worry about - this is the structu
 In rough order of how close each already is:
 
 1. ~~RE3 PS5→PC~~ - **done.** Root-caused and fixed 2026-08-06 (wrong form of Steam ID embedded), confirmed loading correctly in-game. RE3 is now fully confirmed both directions.
-2. **RE4 PC→PS5, then PS5→PC** - same, plus resolves the platform-field uncertainty either way.
-3. **Subnautica and Subnautica: Below Zero, both directions** - simplest format, lowest risk.
-4. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.
-5. **RE2 PS5→PC, live** - first-ever live test of this direction; also tests whether the `0`-account-ID PC output is accepted.
+2. ~~RE2 PS5→PC, live~~ - **done.** Confirmed loading correctly in-game on a real Steam Deck (2026-08-08).
+3. **RE4 PC→PS5, then PS5→PC** - same, plus resolves the platform-field uncertainty either way.
+4. **Subnautica and Subnautica: Below Zero, both directions** - simplest format, lowest risk.
+5. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.
 6. **BG3 diagnostic** (duplicate-folder test, no code/no upload) - not a "live test" of a conversion, but the next real step before BG3's PS5→PC bug can even be debugged further.
 7. **Clair re-confirmation** - lowest priority (presumed working, foundational), but worth doing once for a complete, fully-current record.

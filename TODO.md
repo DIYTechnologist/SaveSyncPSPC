@@ -11,8 +11,8 @@
 
 ## RE Engine (RE2):
 
-- `save-sync --game re2 ... --apply` needs one live end-to-end CLI run against a real console (the conversion library itself is already confirmed against real saves that loaded - see `docs/ressave.md`).
-- PS5 -> PC is implemented and unit-tested but never confirmed in-game; it writes `0` as the embedded Steam account id, which the game may reject.
+- `save-sync --game re2 ... --apply` needs one live end-to-end CLI run against a real console (the conversion library itself is already confirmed against real saves that loaded - see `docs/ressave.md`). PS5 -> PC is now fully confirmed in-game (2026-08-08, see `TestCases.md`).
+- "Extra mode" saves (Ghost Survivors/4th Survivor, slot `21Slot`) use a different, unsupported platform-identity class (`0x3f25bafa`, enum-only, no boolean field) than normal story saves (`0x8b7dd7a1`). Currently correctly refused by the `patched != 2` check in `internal/reengine/convert.go` rather than mis-converted, but nothing implements support for it. Found 2026-08-06 while picking a test slot; see `TestCases.md`'s RE2 section.
 
 ## RE Engine family (RE3/RE4/RE7/Village/Requiem):
 
