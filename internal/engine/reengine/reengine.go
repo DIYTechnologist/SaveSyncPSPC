@@ -58,6 +58,7 @@ var titles = map[string]re.TitleConfig{
 	"re2": re.RE2,
 	"re3": re.RE3,
 	"re4": {Key: re.KeyRE4, PlatformClass: re.RE4PlatformClass},
+	"re7": re.RE7,
 }
 
 // Config is the engine_config block for a "reengine" profile.
@@ -67,7 +68,7 @@ type Config struct {
 	// identifies the slot.
 	SaveNamePrefix string `json:"save_name_prefix"`
 	// Title selects this profile's format facts from titles above
-	// (currently "re2" or "re3").
+	// (currently "re2", "re3", "re4", or "re7").
 	Title  string        `json:"title"`
 	Images []ImageConfig `json:"images"`
 }

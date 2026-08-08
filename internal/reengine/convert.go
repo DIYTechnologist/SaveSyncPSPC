@@ -49,7 +49,12 @@ type TitleConfig struct {
 	// for the PS5 side too unless PS5Unencrypted.
 	Key []byte
 	// PlatformClass is this title's settings class hash carrying the two
-	// platform-identity fields (fieldPlatformEnum/fieldPlatformBool).
+	// platform-identity fields (fieldPlatformEnum/fieldPlatformBool). Zero
+	// means the title has no such field at all - confirmed for RE7 by
+	// searching every class in a real PC and a real PS5 save (thousands
+	// of classes checked, zero matches) - in which case convert skips
+	// retargeting entirely and relies on the container-level differences
+	// (encryption, ID field, body offset) alone.
 	PlatformClass uint32
 	// PS5Unencrypted selects the flags=0 PS5 container shape confirmed on
 	// real RE3/RE7/RE Village saves (no blowfish_option field, no
@@ -117,12 +122,14 @@ func convert(data, srcKey []byte, dstOffset int, dstPlatform platformValues, dst
 		return nil, fmt.Errorf("parsing source save's field data: %w", err)
 	}
 
-	patched := 0
-	for i := range objs {
-		patched += retargetPlatform(&objs[i].Class, dstPlatform, platformClass)
-	}
-	if patched != 2 {
-		return nil, fmt.Errorf("expected to retarget exactly 2 platform fields, found %d - this save's layout isn't the one this converter was built against", patched)
+	if platformClass != 0 {
+		patched := 0
+		for i := range objs {
+			patched += retargetPlatform(&objs[i].Class, dstPlatform, platformClass)
+		}
+		if patched != 2 {
+			return nil, fmt.Errorf("expected to retarget exactly 2 platform fields, found %d - this save's layout isn't the one this converter was built against", patched)
+		}
 	}
 
 	// Re-emit at the source's own offset first, purely to learn where the
@@ -200,6 +207,16 @@ var RE2 = TitleConfig{Key: KeyRE2, PlatformClass: 0x8b7dd7a1}
 // fields were found by diffing real PC/PS5 saves, matching RE2's field
 // hashes exactly) but the converted output has not been loaded in-game.
 var RE3 = TitleConfig{Key: KeyRE3, PlatformClass: 0x4a5aa7b, PS5Unencrypted: true}
+
+// RE7 is confirmed against real saves at the format level: PC decrypts
+// with KeyRE7 at the usual offset, PS5 parses as plaintext at the
+// unencrypted offset, both checksums valid. Unlike RE2/RE3/RE4 it has no
+// PlatformClass - searching every class in a real PC save (~4300
+// classes) and a real PS5 save (~1900 classes) found zero occurrences of
+// the shared platform-identity fields, so conversion relies solely on
+// the container-level differences. Converted output has not been loaded
+// in-game.
+var RE7 = TitleConfig{Key: KeyRE7, PS5Unencrypted: true}
 
 // ConvertPCToPS5 rewrites a PC (Steam) save into one a PS5 will load,
 // using RE2's title facts. Confirmed working against a real console on

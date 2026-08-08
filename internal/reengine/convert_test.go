@@ -287,6 +287,49 @@ func TestTitleConfigConvertsUnencryptedPS5Shape(t *testing.T) {
 	}
 }
 
+// TestConvertSkipsRetargetingWhenPlatformClassIsZero covers RE7's shape:
+// unlike RE2/RE3/RE4, its object graph carries no platform-identity
+// field at all (confirmed by exhaustively searching a real PC and a
+// real PS5 save - see RE7's doc comment in this package). A
+// TitleConfig with PlatformClass left at zero must convert successfully
+// by skipping retargeting entirely, rather than failing the "exactly 2
+// fields patched" check every other title relies on.
+func TestConvertSkipsRetargetingWhenPlatformClassIsZero(t *testing.T) {
+	body := buildStructBody(PCDataOffset, []byte("test")) // 4 bytes, keeps the body 4-byte aligned
+	pcData, err := Build(body, KeyRE3, BuildOptions{HasID: true, SteamID: 11052978})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	title := TitleConfig{Key: KeyRE3, PS5Unencrypted: true} // PlatformClass left at zero
+	ps5, err := title.ConvertPCToPS5(pcData)
+	if err != nil {
+		t.Fatalf("ConvertPCToPS5 with no PlatformClass: %v", err)
+	}
+	dec, err := Decode(ps5, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dec.DataOffset != ps5UnencryptedOffset {
+		t.Errorf("body at %#x, want %#x", dec.DataOffset, ps5UnencryptedOffset)
+	}
+	if !dec.HashValid {
+		t.Error("checksum invalid")
+	}
+
+	back, err := title.ConvertPS5ToPC(ps5, 11052978)
+	if err != nil {
+		t.Fatalf("ConvertPS5ToPC with no PlatformClass: %v", err)
+	}
+	backDec, err := Decode(back, KeyRE3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !backDec.HashValid {
+		t.Error("checksum invalid on round trip")
+	}
+}
+
 func TestConvertRefusesUnrecognisedLayout(t *testing.T) {
 	b := &rszBuilder{base: PCDataOffset}
 	b.u32(0xAAAAAAAA)

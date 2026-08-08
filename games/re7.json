@@ -1,0 +1,29 @@
+{
+  "game": "re7",
+  "name": "Resident Evil 7: Biohazard",
+  "ids": [
+    {
+      "id": "PPSA04400",
+      "region": "USA"
+    }
+  ],
+  "pc_save_dirs": {
+    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 7",
+    "linux": "~/.local/share/Steam/userdata"
+  },
+  "steam_app_id": "418370",
+  "engine": "reengine",
+  "engine_config": {
+    "title": "re7",
+    "save_name_prefix": "sdimg_SAVESERVICE-LINE-0-",
+    "images": [
+      {
+        "logical": "save",
+        "label": "Save",
+        "dynamic_save_name": true,
+        "dynamic_payload": true,
+        "dynamic_pc_file": true
+      }
+    ]
+  }
+}
