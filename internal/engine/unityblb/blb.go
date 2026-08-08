@@ -59,11 +59,16 @@ func Decode(data []byte) ([]Entry, error) {
 		}
 		size := binary.LittleEndian.Uint32(raw[pos : pos+4])
 		pos += 4
-		if pos+int(size) > len(raw) {
+		// Compare in uint64: size is a full uint32 (up to ~4GB), and
+		// pos+int(size) computed directly in int would wrap around on a
+		// 32-bit build for a large enough size, bypassing this bounds
+		// check instead of failing loudly.
+		if uint64(pos)+uint64(size) > uint64(len(raw)) {
 			return nil, fmt.Errorf("truncated entry %q: data runs past end of file", name)
 		}
-		content := append([]byte(nil), raw[pos:pos+int(size)]...)
-		pos += int(size)
+		end := pos + int(size)
+		content := append([]byte(nil), raw[pos:end]...)
+		pos = end
 		entries = append(entries, Entry{Name: name, Data: content})
 	}
 	return entries, nil

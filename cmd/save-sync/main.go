@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,6 +47,7 @@ func run(args []string) error {
 	timeoutSeconds := global.Float64("timeout", 120, "HTTP timeout in seconds")
 	ps5UID := global.String("ps5-uid", "", "Optional PS5 user id filter from Garlic /api/saves")
 	ps5SaveName := global.String("ps5-save-name", "", "Garlic save_name to target for games whose save slots aren't fixed (e.g. Baldur's Gate 3's sdimg_SaveNNNN)")
+	steamID := global.String("steam-id", "", "Steam account ID of the account that will load the save - the number in Steam's userdata/<id>/ path, or the SteamID64 (either is accepted). Needed by games that bind a PC save to an account (RE2/RE3 embed it; RE4's Lime cipher is keyed off it)")
 	gamesDir := global.String("games-dir", games.DefaultGamesDir(), "Game metadata directory")
 	gameKey := global.String("game", "", "Game key from games/<game>.json, e.g. clair")
 	titleID := global.String("title-id", "", "PS5 title id to map through games/*.json, e.g. PPSA17599")
@@ -90,11 +92,21 @@ func run(args []string) error {
 		return fmt.Errorf("--pc-dir is required")
 	}
 
+	var steamIDValue uint64
+	if *steamID != "" {
+		parsed, err := strconv.ParseUint(*steamID, 10, 64)
+		if err != nil {
+			return fmt.Errorf("--steam-id must be a number: %w", err)
+		}
+		steamIDValue = parsed
+	}
+
 	options := bridge.Options{
 		GarlicURL:   *garlicURL,
 		Timeout:     timeout,
 		PS5UID:      *ps5UID,
 		PS5SaveName: *ps5SaveName,
+		SteamID:     steamIDValue,
 		GamesDir:    *gamesDir,
 		Game:        *gameKey,
 		TitleID:     *titleID,
@@ -151,6 +163,11 @@ Global options:
   --ps5-uid UID         Optional PS5 user id filter from Garlic
   --ps5-save-name NAME  Garlic save_name to target for games without a fixed
                         save slot (e.g. Baldur's Gate 3's sdimg_SaveNNNN)
+  --steam-id ID         Steam account ID of the account that will load the
+                        save: the number in Steam's userdata/<id>/ path, or
+                        the SteamID64 (either accepted). Needed by games that
+                        bind a PC save to an account - RE2/RE3 embed it in the
+                        save, RE4's Lime cipher is keyed off it
   --games-dir DIR       Game metadata directory
   --game KEY            Game key, e.g. clair
   --title-id ID         PS5 title id, e.g. PPSA17599

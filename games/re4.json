@@ -1,20 +1,20 @@
 {
-  "game": "re2",
-  "name": "Resident Evil 2 (2019)",
+  "game": "re4",
+  "name": "Resident Evil 4 (2023)",
   "ids": [
     {
-      "id": "PPSA04288",
+      "id": "PPSA07411",
       "region": "USA"
     }
   ],
   "pc_save_dirs": {
-    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 2  BIOHAZARD RE2",
+    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 4",
     "linux": "~/.local/share/Steam/userdata"
   },
-  "steam_app_id": "883710",
+  "steam_app_id": "2050650",
   "engine": "reengine",
   "engine_config": {
-    "title": "re2",
+    "title": "re4",
     "save_name_prefix": "sdimg_SAVESERVICE-LINE-0-",
     "images": [
       {

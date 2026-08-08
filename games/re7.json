@@ -1,20 +1,20 @@
 {
-  "game": "re2",
-  "name": "Resident Evil 2 (2019)",
+  "game": "re7",
+  "name": "Resident Evil 7: Biohazard",
   "ids": [
     {
-      "id": "PPSA04288",
+      "id": "PPSA04400",
       "region": "USA"
     }
   ],
   "pc_save_dirs": {
-    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 2  BIOHAZARD RE2",
+    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 7",
     "linux": "~/.local/share/Steam/userdata"
   },
-  "steam_app_id": "883710",
+  "steam_app_id": "418370",
   "engine": "reengine",
   "engine_config": {
-    "title": "re2",
+    "title": "re7",
     "save_name_prefix": "sdimg_SAVESERVICE-LINE-0-",
     "images": [
       {

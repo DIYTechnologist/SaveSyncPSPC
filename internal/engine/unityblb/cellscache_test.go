@@ -2,6 +2,7 @@ package unityblb
 
 import (
 	"archive/zip"
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -149,5 +150,40 @@ func TestFlattenCellsCacheZipIgnoresDirectoryEntries(t *testing.T) {
 	}
 	if entries[0].Name != "CellsCache/baked-batch-cells-5-1-1.bin" {
 		t.Fatalf("entry name = %q", entries[0].Name)
+	}
+}
+
+// TestFlattenCellsCacheZipDataRejectsOversizedEntry is a regression test
+// for a zip-bomb guard: a compressed entry that decompresses past the
+// configured limit must be refused rather than fully read into memory.
+// Uses a tiny injected limit so the test doesn't need to actually
+// decompress hundreds of megabytes to exercise the real 256MB default.
+func TestFlattenCellsCacheZipDataRejectsOversizedEntry(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "baked-batch-cells-5-1-1.bin", Method: zip.Deflate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Highly compressible content that's still bigger than the tiny test
+	// limit once decompressed.
+	if _, err := w.Write(bytes.Repeat([]byte{0}, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := flattenCellsCacheZipDataLimited(buf.Bytes(), 100); err == nil {
+		t.Fatal("expected an entry exceeding the size limit to be rejected")
+	}
+
+	// The same data must still succeed under a limit that actually fits it.
+	entries, err := flattenCellsCacheZipDataLimited(buf.Bytes(), 1000)
+	if err != nil {
+		t.Fatalf("expected content within the limit to succeed, got: %v", err)
+	}
+	if len(entries) != 1 || len(entries[0].Data) != 1000 {
+		t.Fatalf("entries = %#v", entries)
 	}
 }

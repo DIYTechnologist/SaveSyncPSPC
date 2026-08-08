@@ -44,13 +44,33 @@ type ImageConfig struct {
 	DynamicPCFile   bool   `json:"dynamic_pc_file"`
 }
 
+// titles maps a profile's "title" value to the per-title format facts
+// (key, platform-identity class, PS5 container shape) in
+// internal/reengine. Adding a new title means adding a TitleConfig there
+// and a line here - no other code in this package is title-specific,
+// *except* "re4": its PS5 side is plain Blowfish like RE2 (so its entry
+// here is still used by Inspect/checkSlot for that side), but its Steam
+// side uses a completely different cipher (Lime, not Blowfish at all),
+// so ConvertToPS5/ConvertFromPS5 special-case cfg.Title == "re4" and
+// call re.ConvertRE4PCToPS5/ConvertRE4PS5ToPC directly instead of going
+// through TitleConfig's (Blowfish-only) methods.
+var titles = map[string]re.TitleConfig{
+	"re2": re.RE2,
+	"re3": re.RE3,
+	"re4": {Key: re.KeyRE4, PlatformClass: re.RE4PlatformClass},
+	"re7": re.RE7,
+}
+
 // Config is the engine_config block for a "reengine" profile.
 type Config struct {
 	// SaveNamePrefix is the fixed part of this title's Garlic save names,
 	// e.g. "sdimg_SAVESERVICE-LINE-0-" for RE2; whatever follows it
 	// identifies the slot.
-	SaveNamePrefix string        `json:"save_name_prefix"`
-	Images         []ImageConfig `json:"images"`
+	SaveNamePrefix string `json:"save_name_prefix"`
+	// Title selects this profile's format facts from titles above
+	// (currently "re2", "re3", "re4", or "re7").
+	Title  string        `json:"title"`
+	Images []ImageConfig `json:"images"`
 }
 
 type Engine struct{}
@@ -70,6 +90,9 @@ func (Engine) ParseConfig(raw json.RawMessage) (any, error) {
 	}
 	if cfg.SaveNamePrefix == "" {
 		return nil, fmt.Errorf("reengine engine_config requires save_name_prefix")
+	}
+	if _, ok := titles[cfg.Title]; !ok {
+		return nil, fmt.Errorf("reengine engine_config: unknown or missing title %q", cfg.Title)
 	}
 	if len(cfg.Images) != 1 {
 		return nil, fmt.Errorf("reengine engine_config needs exactly one image, got %d", len(cfg.Images))
@@ -200,8 +223,31 @@ const (
 // Inspect checks that a payload is a DSSS save this engine can read.
 // Both checks are tier-3: a payload failing either isn't the thing the
 // engine expects at all, so neither is overridable.
-func (Engine) Inspect(_ any, logical string, payload []byte, _ engine.Side, _ map[string]bool) engine.Verdict {
-	dec, err := re.Decode(payload, re.KeyRE2)
+func (Engine) Inspect(cfgAny any, logical string, payload []byte, side engine.Side, _ map[string]bool) engine.Verdict {
+	cfg := cfgAny.(Config)
+
+	// RE4's Steam side uses Lime, not Blowfish - re.Decode doesn't apply
+	// at all, and a full LimeDecode needs a Steam ID this method doesn't
+	// have. A structural-only header check is all that's possible (and
+	// all that's needed: save-sync inspect already refuses dynamic-image
+	// engines, which this one is, so nothing currently calls this for
+	// re4's PC side expecting more).
+	if cfg.Title == "re4" && side == engine.SidePC {
+		check := engine.CheckResult{Logical: logical, Check: CheckMagic, Tier: engine.TierWrongFormat}
+		if err := re.LimeHeaderValid(payload); err != nil {
+			check.Reason = err.Error()
+			return engine.Verdict{Tier: engine.TierWrongFormat, Checks: []engine.CheckResult{check}}
+		}
+		check.Passed = true
+		return engine.Verdict{Portable: true, Checks: []engine.CheckResult{check}}
+	}
+
+	title := titles[cfg.Title]
+	key := title.Key
+	if side == engine.SidePS5 && title.PS5Unencrypted {
+		key = nil
+	}
+	dec, err := re.Decode(payload, key)
 	if err != nil {
 		return engine.Verdict{
 			Tier: engine.TierWrongFormat,
@@ -231,12 +277,14 @@ func (Engine) Inspect(_ any, logical string, payload []byte, _ engine.Side, _ ma
 }
 
 // slotIDOf reads the slot number a save carries internally - the
-// trailing bytes of its decrypted body.
-func slotIDOf(dec re.Decoded) (int32, bool) {
-	if len(dec.Body) < 4 {
+// trailing bytes of its decrypted body. Takes a plain body slice (rather
+// than re.Decoded) so it works for both re.Decoded.Body and RE4's
+// re.LimeDecoded.Body.
+func slotIDOf(body []byte) (int32, bool) {
+	if len(body) < 4 {
 		return 0, false
 	}
-	tail := dec.Body[len(dec.Body)-4:]
+	tail := body[len(body)-4:]
 	return int32(uint32(tail[0]) | uint32(tail[1])<<8 | uint32(tail[2])<<16 | uint32(tail[3])<<24), true
 }
 
@@ -256,8 +304,9 @@ func expectedSlotID(token string) (int32, bool) {
 // checkSlot refuses a conversion whose source save belongs to a
 // different slot than the container it would be written into. The slot
 // number is baked into the save, so a mismatch produces a file the
-// console will not accept.
-func checkSlot(cfg Config, image gameapi.SaveImage, data []byte) error {
+// console will not accept. key must match data's own side (nil for an
+// unencrypted-PS5 title's PS5 payload).
+func checkSlot(cfg Config, image gameapi.SaveImage, data, key []byte) error {
 	token, err := slotToken(cfg, image.SaveName)
 	if err != nil {
 		return err
@@ -266,11 +315,11 @@ func checkSlot(cfg Config, image gameapi.SaveImage, data []byte) error {
 	if !ok {
 		return fmt.Errorf("slot %q isn't a recognised slot name", token)
 	}
-	dec, err := re.Decode(data, re.KeyRE2)
+	dec, err := re.Decode(data, key)
 	if err != nil {
 		return err
 	}
-	got, ok := slotIDOf(dec)
+	got, ok := slotIDOf(dec.Body)
 	if !ok {
 		return fmt.Errorf("save is too short to carry a slot number")
 	}
@@ -298,10 +347,16 @@ func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string,
 	if err != nil {
 		return gameapi.ConversionResult{}, err
 	}
-	if err := checkSlot(cfg, image, pcData); err != nil {
+
+	if cfg.Title == "re4" {
+		return convertRE4ToPS5(cfg, image, pcData)
+	}
+
+	title := titles[cfg.Title]
+	if err := checkSlot(cfg, image, pcData, title.Key); err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
-	converted, err := re.ConvertPCToPS5(pcData, re.KeyRE2)
+	converted, err := title.ConvertPCToPS5(pcData)
 	if err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.PCFile, err)
 	}
@@ -327,13 +382,33 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 	if !ok {
 		return gameapi.ConversionResult{}, fmt.Errorf("missing PS5 payload for %s", image.Logical)
 	}
-	if err := checkSlot(cfg, image, data); err != nil {
+
+	if cfg.Title == "re4" {
+		return convertRE4FromPS5(cfg, image, data)
+	}
+
+	// A PC save embeds the Steam account id, and the source (a PS5 save)
+	// doesn't carry one - it has to come from the caller. The game
+	// silently omits a save whose embedded id isn't the loading
+	// account's from its load list, so getting this wrong looks like an
+	// empty slot rather than an error (see TestCases.md). Checked before
+	// touching data at all, same as RE4's equivalent check in
+	// convertRE4FromPS5, so a missing --steam-id fails fast rather than
+	// after a wasted decode.
+	if image.SteamID == 0 {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: converting to this game's Steam save format needs the account that will load it - pass --steam-id", image.Logical)
+	}
+
+	title := titles[cfg.Title]
+	ps5Key := title.Key
+	if title.PS5Unencrypted {
+		ps5Key = nil
+	}
+	if err := checkSlot(cfg, image, data, ps5Key); err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
 
-	// A PC save embeds the Steam account id. We don't know it here, and
-	// the source (a PS5 save) doesn't carry one, so it's left zero.
-	converted, err := re.ConvertPS5ToPC(data, re.KeyRE2, 0)
+	converted, err := title.ConvertPS5ToPC(data, image.SteamID)
 	if err != nil {
 		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
 	}
@@ -352,10 +427,110 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 		Manifest: map[string]any{
 			"ps5_save": image.SaveName,
 			"pc_file":  outName,
-			"note":     "PS5->PC has not been confirmed in-game. The embedded Steam account id is written as 0, which the game may reject; if so it needs the real id of the account that will load the save.",
+			"note":     "The embedded Steam account id is the --steam-id passed for this run, normalized to the 32-bit account id. It must be the account that will load the save: the game silently omits a save belonging to another account from its load list.",
 		},
 		Warnings: []string{
 			"PS5->PC conversion has never been verified on a real PC install - back up the PC save directory first.",
+		},
+	}, nil
+}
+
+// convertRE4ToPS5 and convertRE4FromPS5 handle RE4 specially: its Steam
+// build uses a genuinely different cipher (Lime, keyed off the Steam
+// account) than every other title this engine supports, so it needs its
+// own slot check and conversion call rather than the TitleConfig path
+// ConvertToPS5/ConvertFromPS5 otherwise use. Confirmed format-level
+// (round trip against two real Steam saves - see docs/dev-res2.md) but
+// not tested in-game, and RE4PlatformClass's mapping was found from a
+// single sample per side unlike RE2/RE3's multi-sample confirmation.
+func convertRE4ToPS5(cfg Config, image gameapi.SaveImage, pcData []byte) (gameapi.ConversionResult, error) {
+	if image.SteamID == 0 {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: RE4's Steam save format is keyed off the account - pass --steam-id", image.Logical)
+	}
+	token, err := slotToken(cfg, image.SaveName)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	want, ok := expectedSlotID(token)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: slot %q isn't a recognised slot name", image.Logical, token)
+	}
+	dec, err := re.LimeDecode(pcData, image.SteamID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	got, ok := slotIDOf(dec.Body)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: save is too short to carry a slot number", image.Logical)
+	}
+	if got != want {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: source save is for slot %d but the target container is slot %d (%q); a save must be written to its own slot",
+			image.Logical, got, want, token)
+	}
+
+	converted, err := re.ConvertRE4PCToPS5(pcData, image.SteamID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.PCFile, err)
+	}
+
+	return gameapi.ConversionResult{
+		Outputs: map[string][]byte{image.SaveName: converted},
+		Manifest: map[string]any{
+			"pc_file":  image.PCFile,
+			"ps5_save": image.SaveName,
+			"payload":  image.Payload,
+			"note":     "RE4's platform-identity field mapping was found from a single real sample per side (unlike RE2/RE3's multi-sample confirmation) and this conversion has not been tested in-game. The save-select entry also keeps the previous occupant's text until the game next saves to this slot.",
+		},
+		Warnings: []string{
+			"RE4 support is newer and less-verified than RE2/RE3: format-level round trip confirmed against real saves, but not yet tested in-game.",
+		},
+	}, nil
+}
+
+func convertRE4FromPS5(cfg Config, image gameapi.SaveImage, ps5Data []byte) (gameapi.ConversionResult, error) {
+	if image.SteamID == 0 {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: converting to RE4's Steam save format needs the target account - pass --steam-id", image.Logical)
+	}
+	token, err := slotToken(cfg, image.SaveName)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	want, ok := expectedSlotID(token)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: slot %q isn't a recognised slot name", image.Logical, token)
+	}
+	dec, err := re.Decode(ps5Data, re.KeyRE4)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	got, ok := slotIDOf(dec.Body)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: save is too short to carry a slot number", image.Logical)
+	}
+	if got != want {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: source save is for slot %d but the target container is slot %d (%q); a save must be written to its own slot",
+			image.Logical, got, want, token)
+	}
+
+	converted, err := re.ConvertRE4PS5ToPC(ps5Data, image.SteamID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+
+	outName, err := fileForSlot(token)
+	if err != nil {
+		return gameapi.ConversionResult{}, err
+	}
+
+	return gameapi.ConversionResult{
+		Outputs: map[string][]byte{outName: converted},
+		Manifest: map[string]any{
+			"ps5_save": image.SaveName,
+			"pc_file":  outName,
+			"note":     "PS5->PC has not been confirmed in-game. RE4's platform-identity field mapping was found from a single real sample per side.",
+		},
+		Warnings: []string{
+			"RE4 PS5->PC conversion has never been verified on a real PC install - back up the PC save directory first.",
 		},
 	}, nil
 }

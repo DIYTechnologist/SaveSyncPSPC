@@ -89,7 +89,17 @@ func (r *reader) fstring() (string, error) {
 		return string(raw), nil
 	}
 
-	raw, err := r.take(int(-length) * 2)
+	// Widen to int64 before negating/doubling: length is int32, and
+	// negating math.MinInt32 in 32-bit arithmetic overflows back to
+	// itself (still negative), which int(...) * 2 could then wrap to a
+	// small or negative byte count on a 32-bit build, bypassing take's
+	// own bounds check instead of failing loudly. int64 has room for
+	// int32's full range with no such wraparound.
+	byteLen := -int64(length) * 2
+	if byteLen < 0 || byteLen > int64(len(r.data)) {
+		return "", fmt.Errorf("invalid UTF-16 string length %d", length)
+	}
+	raw, err := r.take(int(byteLen))
 	if err != nil {
 		return "", err
 	}
@@ -163,7 +173,16 @@ func Parse(data []byte, label string) (Info, error) {
 		if err != nil {
 			return Info{}, err
 		}
-		if _, err := r.take(int(customCount) * 20); err != nil {
+		// Widen to int64 before multiplying: customCount is uint32, and
+		// int(customCount)*20 in 32-bit int arithmetic can wrap around to
+		// a small positive number for a large enough customCount on a
+		// 32-bit build, bypassing take's own bounds check instead of
+		// failing loudly.
+		customBytes := int64(customCount) * 20
+		if customBytes > int64(len(r.data)) {
+			return Info{}, fmt.Errorf("custom version count %d implies more data than the file has", customCount)
+		}
+		if _, err := r.take(int(customBytes)); err != nil {
 			return Info{}, err
 		}
 	}

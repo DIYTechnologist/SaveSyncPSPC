@@ -133,3 +133,60 @@ func TestReadRSZObjectsRejectsImpossibleArrayLength(t *testing.T) {
 		t.Fatal("expected an error rather than a runaway allocation")
 	}
 }
+
+// TestClampArrayPreallocation is a regression test for the preallocation
+// amplification readArray guards against: readArray's own bounds check
+// compares a claimed array length against remaining *bytes*, not
+// remaining/memberSize, so for any element type wider than one byte a
+// claimed length can pass that check while still being far larger than
+// the element count the remaining bytes could really supply -
+// preallocating make([]Value, 0, length) directly off such a length
+// amplifies a modest byte count into a much larger up-front allocation
+// (Value is a struct well over one byte). clampArrayPreallocation must
+// cap what's handed to make(), regardless of how large the claimed
+// length is, while still returning the real length unchanged when it's
+// already small.
+func TestClampArrayPreallocation(t *testing.T) {
+	cases := []struct {
+		length uint32
+		want   int
+	}{
+		{length: 0, want: 0},
+		{length: 10, want: 10},
+		{length: maxArrayPreallocation, want: maxArrayPreallocation},
+		{length: maxArrayPreallocation + 1, want: maxArrayPreallocation},
+		{length: 0xFFFFFFFF, want: maxArrayPreallocation},
+	}
+	for _, c := range cases {
+		if got := clampArrayPreallocation(c.length); got != c.want {
+			t.Errorf("clampArrayPreallocation(%d) = %d, want %d", c.length, got, c.want)
+		}
+	}
+}
+
+// TestReadRSZObjectsBoundsPreallocationForWideElements exercises the
+// amplification scenario end to end: a U64 (8-byte) array whose claimed
+// length passes readArray's remaining-*bytes* check (length is well
+// under the buffer size) but which the actual remaining bytes couldn't
+// possibly back at 8 bytes/element. Before clampArrayPreallocation, this
+// shape is exactly what let a modest file force a preallocation far
+// larger than the file itself; parsing must still fail cleanly on the
+// undersized buffer rather than hang or blow up memory.
+func TestReadRSZObjectsBoundsPreallocationForWideElements(t *testing.T) {
+	b := &rszBuilder{}
+	b.u32(0xAAAAAAAA)
+	b.u32(1)          // one field
+	b.u32(0xBBBBBBBB) // class hash
+	b.u32(0xCCCCCCCC) // field hash
+	arrayTag := int32(FieldTypeArray)
+	b.u32(uint32(arrayTag))
+	b.u32(uint32(FieldTypeU64)) // member type - 8 bytes/element
+	b.u32(8)                    // member size
+	b.u32(20000)                // length: within remaining bytes, but 20000 elements need 160000 bytes
+	b.u32(0)                    // ArrayType::Value
+	b.buf.Write(make([]byte, 20000))
+
+	if _, err := ReadRSZObjects(b.buf.Bytes(), 0); err == nil {
+		t.Fatal("expected an error: not enough bytes to back a 20000-element U64 array")
+	}
+}

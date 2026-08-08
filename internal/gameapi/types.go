@@ -48,6 +48,21 @@ type SaveImage struct {
 	// save directory's actual contents (engine.ResolvePCFile) rather
 	// than assumed from config.
 	DynamicPCFile bool `json:"dynamic_pc_file"`
+
+	// SteamID identifies the account a PC-side save belongs to, for
+	// engines that need it: RE4's "Lime" cipher is keyed off it (there
+	// is no key to embed in a profile - the account derives it), and
+	// RE2/RE3 PC saves embed it in the container's own ID field. Zero
+	// if the run didn't supply one; engines that need it should error
+	// clearly rather than silently produce a save the target account
+	// can't load.
+	//
+	// Always the 32-bit Steam *account* ID (the number in Steam's
+	// userdata/<id>/ path), never the 64-bit SteamID64 - normalized by
+	// bridge.resolveDynamicImages, which accepts either form. Real PC
+	// saves store the account ID here, and writing a SteamID64 instead
+	// produces a save the game silently omits from its load list.
+	SteamID uint64 `json:"-"`
 }
 
 type ConversionResult struct {
