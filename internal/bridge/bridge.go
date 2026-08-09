@@ -29,16 +29,26 @@ type Options struct {
 	// DynamicSaveName set; ignored otherwise (Clair's SaveName is always
 	// config-known, so this is a no-op for it).
 	PS5SaveName string
-	GamesDir    string
-	Game        string
-	TitleID     string
-	BackupRoot  string
-	PCDir       string
-	OutputDir   string
-	Force       bool
-	Install     bool
-	Apply       bool
-	Yes         bool
+	// SteamID is the Steam account ID some engines' PC-side ciphers are
+	// keyed off (e.g. RE4's "Lime": there is no fixed key at all, the
+	// account ID derives it). Required whenever the selected engine
+	// needs it (currently just reengine's "re4" title); ignored
+	// otherwise. Threaded through via gameapi.SaveImage.SteamID rather
+	// than the engine.Engine interface itself, the same way
+	// PS5SaveName flows through resolveDynamicImages instead of a
+	// dedicated parameter - avoids changing every engine's method
+	// signature for a fact only one engine currently needs.
+	SteamID    uint64
+	GamesDir   string
+	Game       string
+	TitleID    string
+	BackupRoot string
+	PCDir      string
+	OutputDir  string
+	Force      bool
+	Install    bool
+	Apply      bool
+	Yes        bool
 	// Allow names portability-gate checks to bypass for this run (see
 	// engine.CheckResult / the unreal engine's gate.go). Unknown tokens
 	// are a hard error. For pc-to-ps5, any non-empty Allow requires Apply
@@ -235,6 +245,47 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 	return backupDir, nil
 }
 
+// sanitizeGarlicPathComponent rejects a SaveName/Payload value that isn't
+// safe to use as a single filesystem path component. image.Payload for a
+// DynamicPayload image is chosen from filenames listed by Garlic's own
+// mount-listing response (see resolveDynamicImages) - network input from
+// the PS5 device, not something this tool generates itself - so a
+// crafted or compromised response naming a file like "../../evil.bin"
+// must not be allowed to escape the backup/output directory when later
+// joined via filepath.Join. A legitimate name is always exactly one path
+// component, so anything that doesn't round-trip through filepath.Base
+// unchanged (or is empty) is rejected outright rather than silently
+// cleaned.
+func sanitizeGarlicPathComponent(kind, name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("empty Garlic %s name", kind)
+	}
+	if filepath.Base(name) != name {
+		return "", fmt.Errorf("refusing unsafe Garlic %s name %q", kind, name)
+	}
+	return name, nil
+}
+
+// steamAccountID normalizes whatever the user passed to --steam-id into
+// the 32-bit Steam *account* ID (the number in Steam's userdata/<id>/
+// path), accepting either that or the 64-bit SteamID64.
+//
+// This distinction is not cosmetic. RE2/RE3 PC saves embed this value
+// verbatim in the container's ID field, and real saves hold the account
+// ID: writing a SteamID64 there instead produces a save the game treats
+// as belonging to a different account and silently omits from its load
+// list entirely - no error, just an apparently empty slot (confirmed
+// live on RE3, 2026-08-06; see TestCases.md).
+//
+// A SteamID64 for an individual account is 0x1100001_00000000 + the
+// account ID, so masking to the low 32 bits recovers the account ID and
+// leaves an already-32-bit value untouched. RE4's Lime cipher applies
+// this same mask internally (limeExponent), so normalizing here matches
+// what that path already does rather than changing its behaviour.
+func steamAccountID(steamID uint64) uint64 {
+	return steamID & 0xffffffff
+}
+
 // resolveDynamicImages fills in any SaveName/Payload/PCFile fields the
 // engine couldn't know ahead of time (see gameapi.SaveImage's Dynamic*
 // fields), returning a fully-concrete copy of images. This runs before
@@ -247,14 +298,20 @@ func BackupCurrentSaves(backupRoot, game, pcDir string, ps5Payloads map[string][
 // source. For "ps5-to-pc" the PC-side file doesn't exist yet - it's an
 // output the engine names itself (typically from the resolved Payload),
 // not something to discover.
-func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName, direction string) ([]gameapi.SaveImage, error) {
+func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, titleIDs []string, images []gameapi.SaveImage, pcDir, ps5UID, ps5SaveName string, steamID uint64, direction string) ([]gameapi.SaveImage, error) {
 	resolved := make([]gameapi.SaveImage, len(images))
+	accountID := steamAccountID(steamID)
 	for i, image := range images {
+		image.SteamID = accountID
 		if image.DynamicSaveName {
 			if ps5SaveName == "" {
 				return nil, fmt.Errorf("%s: this game's PS5 save slot isn't fixed; pass --ps5-save-name (check Garlic's save list for the sdimg_SaveNNNN you want)", image.Logical)
 			}
-			image.SaveName = ps5SaveName
+			sanitized, err := sanitizeGarlicPathComponent("save name", ps5SaveName)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.SaveName = sanitized
 		}
 		if image.DynamicPCFile && direction == "pc-to-ps5" {
 			pcFile, err := eng.ResolvePCFile(cfg, image, pcDir)
@@ -281,7 +338,11 @@ func resolveDynamicImages(client *garlic.Client, eng engine.Engine, cfg any, tit
 			if resolveErr != nil {
 				return nil, fmt.Errorf("%s: %w", image.Logical, resolveErr)
 			}
-			image.Payload = payload
+			sanitized, err := sanitizeGarlicPathComponent("payload", payload)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", image.Logical, err)
+			}
+			image.Payload = sanitized
 		}
 		resolved[i] = image
 	}
@@ -303,7 +364,7 @@ func PS5ToPC(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "ps5-to-pc")
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, options.SteamID, "ps5-to-pc")
 	if err != nil {
 		return err
 	}
@@ -381,7 +442,7 @@ func PCToPS5(options Options) error {
 	if err := PrepareOutputDir(options.OutputDir, options.Force, []string{options.PCDir}); err != nil {
 		return err
 	}
-	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, "pc-to-ps5")
+	images, err := resolveDynamicImages(client, selected.Engine, selected.Config, profile.TitleIDs, selected.Engine.Images(selected.Config), options.PCDir, options.PS5UID, options.PS5SaveName, options.SteamID, "pc-to-ps5")
 	if err != nil {
 		return err
 	}

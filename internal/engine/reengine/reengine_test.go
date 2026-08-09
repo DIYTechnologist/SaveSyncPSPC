@@ -1,6 +1,8 @@
 package reengine
 
 import (
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -8,6 +10,7 @@ import (
 	"testing"
 
 	"savesyncpspc/internal/gameapi"
+	re "savesyncpspc/internal/reengine"
 )
 
 const prefix = "sdimg_SAVESERVICE-LINE-0-"
@@ -15,6 +18,7 @@ const prefix = "sdimg_SAVESERVICE-LINE-0-"
 func testConfig(t *testing.T) Config {
 	t.Helper()
 	raw := json.RawMessage(`{
+		"title": "re2",
 		"save_name_prefix": "` + prefix + `",
 		"images": [{"logical":"save","label":"Save","dynamic_save_name":true,"dynamic_payload":true,"dynamic_pc_file":true}]
 	}`)
@@ -27,14 +31,27 @@ func testConfig(t *testing.T) Config {
 
 func TestParseConfigRequiresPrefixAndOneImage(t *testing.T) {
 	for _, tc := range []struct{ name, raw string }{
-		{"no prefix", `{"images":[{"logical":"save"}]}`},
-		{"no images", `{"save_name_prefix":"p_"}`},
-		{"two images", `{"save_name_prefix":"p_","images":[{"logical":"a"},{"logical":"b"}]}`},
-		{"image without logical", `{"save_name_prefix":"p_","images":[{"label":"x"}]}`},
+		{"no prefix", `{"title":"re2","images":[{"logical":"save"}]}`},
+		{"no title", `{"save_name_prefix":"p_","images":[{"logical":"save"}]}`},
+		{"unknown title", `{"title":"re999","save_name_prefix":"p_","images":[{"logical":"save"}]}`},
+		{"no images", `{"title":"re2","save_name_prefix":"p_"}`},
+		{"two images", `{"title":"re2","save_name_prefix":"p_","images":[{"logical":"a"},{"logical":"b"}]}`},
+		{"image without logical", `{"title":"re2","save_name_prefix":"p_","images":[{"label":"x"}]}`},
 	} {
 		if _, err := New().ParseConfig(json.RawMessage(tc.raw)); err == nil {
 			t.Errorf("%s: expected an error", tc.name)
 		}
+	}
+}
+
+func TestParseConfigAcceptsRE3(t *testing.T) {
+	raw := json.RawMessage(`{
+		"title": "re3",
+		"save_name_prefix": "` + prefix + `",
+		"images": [{"logical":"save","label":"Save","dynamic_save_name":true,"dynamic_payload":true,"dynamic_pc_file":true}]
+	}`)
+	if _, err := New().ParseConfig(raw); err != nil {
+		t.Fatalf("expected re3 to be a valid title, got: %v", err)
 	}
 }
 
@@ -188,11 +205,118 @@ func TestImagesCarriesDynamicFlags(t *testing.T) {
 }
 
 func TestInspectRejectsNonDSSSPayload(t *testing.T) {
-	v := New().Inspect(nil, "save", []byte("not a save at all"), 0, nil)
+	v := New().Inspect(testConfig(t), "save", []byte("not a save at all"), 0, nil)
 	if v.Portable {
 		t.Error("garbage should not be portable")
 	}
 	if v.Tier == 0 {
 		t.Error("expected a failing tier")
+	}
+}
+
+func re3TestConfig(t *testing.T) Config {
+	t.Helper()
+	raw := json.RawMessage(`{
+		"title": "re3",
+		"save_name_prefix": "` + prefix + `",
+		"images": [{"logical":"save","label":"Save","dynamic_save_name":true,"dynamic_payload":true,"dynamic_pc_file":true}]
+	}`)
+	cfg, err := New().ParseConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg.(Config)
+}
+
+// TestConvertFromPS5RequiresSteamIDForRE3 is a regression test: RE2/RE3
+// PC saves embed the target account's SteamID64 (see docs/dev-res2.md),
+// but ConvertFromPS5 used to hardcode 0 there instead of forwarding
+// image.SteamID - meaning every PS5->PC conversion silently produced a
+// save the real game would very likely refuse to load, with no signal
+// to the caller that anything was wrong. It must now fail clearly when
+// no --steam-id was given, the same way RE4's equivalent path already
+// does (see TestConvertRE4FromPS5RequiresSteamID) - checked before any
+// data is even touched, so garbage payload bytes are fine here.
+func TestConvertFromPS5RequiresSteamIDForRE3(t *testing.T) {
+	cfg := re3TestConfig(t)
+	image := gameapi.SaveImage{Logical: "save", SaveName: prefix + "0"}
+	ps5Payloads := map[string][]byte{"save": []byte("irrelevant, should fail before reading this")}
+	_, err := New().ConvertFromPS5(cfg, []gameapi.SaveImage{image}, ps5Payloads, "", nil)
+	if err == nil {
+		t.Fatal("expected an error when SteamID is unset")
+	}
+}
+
+// buildRE3PlatformBody constructs the minimal RSZ body ConvertPCToPS5's
+// platform-field patch and checkSlot's trailing slot-id read both need:
+// one object of RE3's platform class (re.RE3.PlatformClass) carrying the
+// PC-shaped platform enum/bool fields (see internal/reengine/convert.go
+// fieldPlatformEnum/fieldPlatformBool), followed by the 4-byte
+// little-endian slot id every save carries at the very end of its body.
+// Mirrors internal/reengine's own (unexported) buildPlatformBodyFor test
+// helper, rebuilt here by hand since it isn't exported across packages.
+func buildRE3PlatformBody(slotID int32) []byte {
+	var b bytes.Buffer
+	u32 := func(v uint32) {
+		var raw [4]byte
+		binary.LittleEndian.PutUint32(raw[:], v)
+		b.Write(raw[:])
+	}
+	u32(0xAAAAAAAA)                      // outer object hash - not itself validated
+	u32(2)                               // field count
+	u32(re.RE3.PlatformClass)            // class hash
+	const fieldPlatformEnum = 0xb41fa365 // PC = 3, PS5 = 2 - see convert.go
+	const fieldPlatformBool = 0xe231b945 // PC = true, PS5 = false - see convert.go
+	u32(fieldPlatformEnum)
+	u32(uint32(re.FieldTypeEnum))
+	u32(4) // declared size
+	u32(3) // enum value: PC
+	u32(fieldPlatformBool)
+	u32(uint32(re.FieldTypeBoolean))
+	u32(1)                   // declared size
+	b.WriteByte(1)           // bool value: true (PC)
+	b.Write([]byte{0, 0, 0}) // readField's post-value alignUp(4)
+	u32(uint32(slotID))
+	return b.Bytes()
+}
+
+// TestConvertFromPS5ForwardsSteamIDForRE3 is the positive counterpart of
+// TestConvertFromPS5RequiresSteamIDForRE3: given a real --steam-id, the
+// resulting PC save must actually embed it, not silently fall back to 0.
+// The value here is a 32-bit account id, the form real PC saves carry
+// (bridge.steamAccountID normalizes a SteamID64 down to this before the
+// engine ever sees it - see TestSteamAccountIDNormalizesSteamID64).
+func TestConvertFromPS5ForwardsSteamIDForRE3(t *testing.T) {
+	cfg := re3TestConfig(t)
+	const wantSteamID = uint64(11052978)
+
+	pcBody := buildRE3PlatformBody(0)
+	pcData, err := re.Build(pcBody, re.RE3.Key, re.BuildOptions{HasID: true, SteamID: 12345})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps5Data, err := re.RE3.ConvertPCToPS5(pcData)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	image := gameapi.SaveImage{Logical: "save", SaveName: prefix + "0", SteamID: wantSteamID}
+	result, err := New().ConvertFromPS5(cfg, []gameapi.SaveImage{image}, map[string][]byte{"save": ps5Data}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	converted, ok := result.Outputs["data000.bin"]
+	if !ok {
+		t.Fatalf("outputs = %#v, want data000.bin", result.Outputs)
+	}
+	dec, err := re.Decode(converted, re.RE3.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !dec.HasID {
+		t.Error("expected the converted PC save to carry an ID field")
+	}
+	if dec.SteamID != wantSteamID {
+		t.Errorf("embedded SteamID = %d, want %d", dec.SteamID, wantSteamID)
 	}
 }

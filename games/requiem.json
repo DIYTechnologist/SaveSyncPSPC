@@ -1,20 +1,20 @@
 {
-  "game": "re2",
-  "name": "Resident Evil 2 (2019)",
+  "game": "requiem",
+  "name": "Resident Evil Requiem",
   "ids": [
     {
-      "id": "PPSA04288",
+      "id": "PPSA31246",
       "region": "USA"
     }
   ],
   "pc_save_dirs": {
-    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL 2  BIOHAZARD RE2",
+    "windows": "%USERPROFILE%\\Documents\\CAPCOM\\RESIDENT EVIL REQUIEM",
     "linux": "~/.local/share/Steam/userdata"
   },
-  "steam_app_id": "883710",
+  "steam_app_id": "3764200",
   "engine": "reengine",
   "engine_config": {
-    "title": "re2",
+    "title": "requiem",
     "save_name_prefix": "sdimg_SAVESERVICE-LINE-0-",
     "images": [
       {

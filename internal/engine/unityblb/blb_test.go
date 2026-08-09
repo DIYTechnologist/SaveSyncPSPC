@@ -3,6 +3,7 @@ package unityblb
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/binary"
 	"testing"
 )
 
@@ -70,6 +71,32 @@ func TestDecodeRejectsTruncatedEntry(t *testing.T) {
 
 	if _, err := Decode(buf.Bytes()); err == nil {
 		t.Fatal("expected an error for a truncated entry")
+	}
+}
+
+// TestDecodeRejectsHugeSizeField is a regression test: a declared entry
+// size of ~4GB (the top of uint32's range) against a tiny actual file
+// must be rejected cleanly, not accepted via wraparound. Before the
+// bounds check widened to uint64 arithmetic, pos+int(size) could wrap to
+// a small or negative value on a 32-bit build for a size this large,
+// bypassing the check and reaching a slice operation directly (this
+// project only ships 64-bit binaries today, so the wraparound itself
+// isn't reachable in practice, but the bounds check should reject an
+// oversized declared size on any platform).
+func TestDecodeRejectsHugeSizeField(t *testing.T) {
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	name := "x"
+	gw.Write([]byte{byte(len(name))})
+	gw.Write([]byte(name))
+	var sizeField [4]byte
+	binary.LittleEndian.PutUint32(sizeField[:], 0xFFFFFFF0) // ~4GB declared size
+	gw.Write(sizeField[:])
+	gw.Write([]byte("only a few real bytes follow"))
+	gw.Close()
+
+	if _, err := Decode(buf.Bytes()); err == nil {
+		t.Fatal("expected a ~4GB declared entry size against a tiny file to be rejected")
 	}
 }
 

@@ -8,6 +8,11 @@ import (
 
 // BuildOptions controls the header shape Build produces.
 type BuildOptions struct {
+	// Unencrypted produces the flags=0 shape confirmed on real PS5 saves
+	// (RE3/RE7/RE Village): no blowfish_option field, no DSSSDSSS check
+	// block, no ID field, body in the clear immediately after the flags
+	// field. HasID/SteamID/key are ignored when this is set.
+	Unencrypted bool
 	// HasID includes an encrypted account-ID field in the header (the PC
 	// build's shape - RE Engine's Steam-account verification). PS5 saves
 	// observed this session don't set this: account identity there comes
@@ -20,10 +25,12 @@ type BuildOptions struct {
 // Build assembles a fresh DSSS container around body (already-decrypted,
 // still-encoded RSZ field data - see Decode's doc comment) using the
 // Blowfish+HasID title family's shape (blowfish_option=3, i.e. every
-// real PC/PS5 RE2/RE3/RE7/RE8 save observed this session). body may be
-// any length: as with the game's own writer, Blowfish covers only the
+// real encrypted PC/PS5 RE2/RE3/RE4/RE7/RE8 save observed this session),
+// or the unencrypted flags=0 shape if opts.Unencrypted is set. body may
+// be any length: as with the game's own writer, Blowfish covers only the
 // 8-byte-aligned prefix and any trailing remainder is stored in the
-// clear (see Decode).
+// clear (see Decode) - this applies only to the encrypted shape, since
+// the unencrypted one has no cipher to align against.
 func Build(body []byte, key []byte, opts BuildOptions) ([]byte, error) {
 	// The game writer zero-pads the file to a 4-byte boundary before
 	// checksumming, which means a body that isn't already 4-aligned
@@ -39,6 +46,17 @@ func Build(body []byte, key []byte, opts BuildOptions) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString("DSSS")
 	writeU32(&buf, 2) // version
+
+	if opts.Unencrypted {
+		writeU32(&buf, 0) // flags
+		buf.Write(body)
+		hash := murmur3_32(buf.Bytes(), 0xffffffff)
+		var hashBytes [4]byte
+		binary.LittleEndian.PutUint32(hashBytes[:], hash)
+		buf.Write(hashBytes[:])
+		return buf.Bytes(), nil
+	}
+
 	flags := uint32(flagBlowfish)
 	if opts.HasID {
 		flags |= flagHasID
