@@ -208,15 +208,23 @@ var RE2 = TitleConfig{Key: KeyRE2, PlatformClass: 0x8b7dd7a1}
 // hashes exactly) but the converted output has not been loaded in-game.
 var RE3 = TitleConfig{Key: KeyRE3, PlatformClass: 0x4a5aa7b, PS5Unencrypted: true}
 
-// RE7 is confirmed against real saves at the format level: PC decrypts
-// with KeyRE7 at the usual offset, PS5 parses as plaintext at the
+// RE7 is confirmed working in-game both directions. PC decrypts with
+// KeyRE7 at the usual offset, PS5 parses as plaintext at the
 // unencrypted offset, both checksums valid. Unlike RE2/RE3/RE4 it has no
 // PlatformClass - searching every class in a real PC save (~4300
 // classes) and a real PS5 save (~1900 classes) found zero occurrences of
 // the shared platform-identity fields, so conversion relies solely on
-// the container-level differences. Converted output has not been loaded
-// in-game.
+// the container-level differences.
 var RE7 = TitleConfig{Key: KeyRE7, PS5Unencrypted: true}
+
+// Village (RE8) is confirmed against real saves at the format level: PC
+// decrypts with KeyRE8 at the usual offset (previously untested),
+// PS5 parses as plaintext at the unencrypted offset, both checksums
+// valid, matching the docs' prediction. Like RE7 (and unlike RE2/RE3/
+// RE4) it has no PlatformClass - the same shared-field search found zero
+// matches in either a real PC or real PS5 save. Converted output has not
+// been loaded in-game yet.
+var Village = TitleConfig{Key: KeyRE8, PS5Unencrypted: true}
 
 // ConvertPCToPS5 rewrites a PC (Steam) save into one a PS5 will load,
 // using RE2's title facts. Confirmed working against a real console on

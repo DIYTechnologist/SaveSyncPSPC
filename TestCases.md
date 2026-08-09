@@ -124,16 +124,49 @@ No cipher, no known platform-identity field to worry about - this is the structu
 
 | Direction | Format-level | Live dry-run | Live applied + in-game |
 |---|---|---|---|
-| PC → PS5 | ✅ format-confirmed against real saves | ⬜ not yet tried | ⬜ not yet tried |
+| PC → PS5 | ✅ format-confirmed against real saves | ✅ real Garlic | ✅ confirmed loading correctly in-game (2026-08-09) - see below for the false-alarm crash first hit along the way |
 | PS5 → PC | ✅ | ✅ real Garlic | ✅ confirmed in-game on a real Steam Deck (2026-08-08), PS5 slot `sdimg_SAVESERVICE-LINE-0-0` → `data000.bin` |
 
 **New in this session (2026-08-08):** RE7 wasn't wired up at all before this - no `games/re7.json`, no `TitleConfig`. Building it surfaced a real structural difference from RE2/RE3/RE4: RE7 decrypts/parses cleanly with the predicted container shapes (PC: `KeyRE7` at offset `0x20`, `HasID=true`; PS5: unencrypted plaintext at offset `0xc`, `HasID=false`, matching RE3's shape), **but it has no platform-identity field anywhere in its object graph.** Every other title carries a settings class with a shared enum+bool pair (`0xb41fa365`/`0xe231b945`) that has to be flipped between PC/PS5; RE7's real PC save (~4300 classes) and real PS5 save (~1900 classes) were both searched exhaustively with zero matches. `TitleConfig.PlatformClass` now accepts zero to mean "skip retargeting, rely on the container-level differences alone" (`internal/reengine/convert.go`), covered by `TestConvertSkipsRetargetingWhenPlatformClassIsZero`. RE7 found on the Steam Deck via Steam app id `418370` (title ID `PPSA04400`, matching the ID list in `TODO.md`).
 
-Live-tested PS5→PC only so far: pulled `sdimg_SAVESERVICE-LINE-0-0`, converted with `--steam-id 11052978`, byte-verified the header/checksum, installed over `data000.bin` on the Deck (backing up the original first), and **confirmed loading correctly in-game**. PC→PS5 hasn't been tried live yet.
+Live-tested PS5→PC only so far: pulled `sdimg_SAVESERVICE-LINE-0-0`, converted with `--steam-id 11052978`, byte-verified the header/checksum, installed over `data000.bin` on the Deck (backing up the original first), and **confirmed loading correctly in-game**.
+
+### PC→PS5: one crash, then confirmed working - root cause was environmental, not the save (2026-08-08/09)
+
+First applied for real via CLI `--apply --yes` against real Garlic, slot 0 (`data000.bin` → `sdimg_SAVESERVICE-LINE-0-0`) on 2026-08-08. Symptom on the PS5: the save-select screen showed "new content has been added"; selecting Load Game a second time showed the file, started loading, then failed with "Something went wrong with the game or application." No data was lost - a read-only pull afterward showed the slot had silently reverted to its pre-test content, presumably the PS5/game's own save-corruption recovery.
+
+Two rounds of diagnosis followed, both using real captured files (the genuine pre-test PS5-native save, backed up at `backup/re7-20260808131657/PS5/sdimg_SAVESERVICE-LINE-0-0/data000.bin`, and the real PC source that was converted):
+
+1. **Ruled out: our conversion corrupting the save's own content.** A field-by-field structural diff (`.scratch_verify/main.go`) between the source PC object tree and the converted PS5 object tree found zero semantic differences - every class hash, field hash, type, and value round-trips correctly. Container header/flags/offset also match a genuine PS5-native save exactly.
+2. **Ruled out: our RSZ read/write path being unsound for RE7.** Built a same-platform round trip of the real native PS5 save - decode, parse, re-emit at the *same* offset (`0xc`), rebuild as an unencrypted PS5 container, with zero platform-related changes at all - and pushed that to the real PS5. It loaded correctly in-game.
+
+**Decisive test (2026-08-09): re-pushed the exact same byte-for-byte file that crashed the first time** (`garlic_pc_to_ps5/sdimg_SAVESERVICE-LINE-0-0/data000.bin`, unmodified) to the PS5 again. **It loaded correctly.** Since the bytes were identical to the run that crashed, this rules out a save-content or conversion bug outright - the original failure was non-deterministic, consistent with jailbreak/environment instability (a flaky Garlic mount, a transient PS5 state, etc.) rather than anything wrong with the converted file. PC→PS5 is now considered confirmed working; the earlier crash is recorded here as a known false alarm rather than a live bug, in case it recurs and the pattern becomes informative.
+
+### Full PC save inventory vs. what's actually syncable (2026-08-09)
+
+The real PC save directory (`.../userdata/11052978/418370/remote/win64_save/` on the Steam Deck) has more files than just slot 0: `data000.bin` (slot 0), `data001Slot.bin` (slot 1), `data002Slot.bin` (slot 2), `data00-1.bin` (global profile), and `data00-3.bin` (24KB - much smaller than a real story save, an unrecognized negative-index slot, not a normal save). Ran a real `save-sync pc-to-ps5 --apply --yes` for slot 0 through the CLI (not the ad-hoc scripts used earlier in this investigation) - **synced and applied successfully**, backup taken automatically first.
+
+**Slots 1 and 2 could not be synced**: Garlic's live save listing for `PPSA04400` only has containers for slot 0 and the two special slots (`sdimg_SAVESERVICE-LINE-0-0`, `sdimg_SAVESERVICE-LINE-0--1`, `sdimg_SAVESERVICE-LINE-0--3`) - nothing for `-1Slot`/`-2Slot`. Garlic mounts an *existing* save index; it can't create a new save container from nothing, and this project has no mechanism to either (only the game itself, saving on the PS5, allocates one). Confirmed via a dry-run CLI attempt for each: `could not find PPSA04400/sdimg_SAVESERVICE-LINE-0-1Slot in Garlic` / same for `-2Slot`. **To sync a PC slot that's never been saved to on the PS5, the PS5 has to save into that slot at least once first** (even a throwaway save), to create the container.
+
+`data00-1.bin` (global profile) is refused by design (`profileSlotToken`, crashes the game at startup if converted - see above). `data00-3.bin` is refused too, generically, by the `n < 0` check in `fileForSlot` - it isn't a recognized slot shape at all and was never at risk of being converted.
+
+## Resident Evil Village (`village`, engine `reengine`)
+
+| Direction | Format-level | Live dry-run | Live applied + in-game |
+|---|---|---|---|
+| PC → PS5 | ✅ real Steam Deck save, checksum valid, 0 semantic diffs on round trip | ✅ real Garlic | ✅ applied for real via CLI `--apply --yes` (2026-08-09), slot 0 (Steam Deck `data000.bin` → PS5 `sdimg_SAVESERVICE-LINE-0-0`), backup taken automatically first, and **confirmed loading correctly in-game** on the first attempt (no false-alarm crash this time) |
+| PS5 → PC | ✅ real PS5 save via Garlic, checksum valid, 0 semantic diffs on round trip | ✅ real Garlic | ✅ installed onto the real Steam Deck (2026-08-09, `--install`, backing up the live PC file first) and **confirmed loading correctly in-game** - tested twice, once against the initial round-tripped save and again after a fresh pull of a deliberately much-smaller PS5 save (417KB vs. ~1MB, an intentional early save made as a second data point) |
+
+**New in this session (2026-08-09):** wired up from scratch - `games/village.json`, `TitleConfig` `Village` (`internal/reengine/convert.go`), `"village"` added to the `titles` map (`internal/engine/reengine/reengine.go`). Previously "not installed anywhere this project has access to"; found installed on the Steam Deck (Steam app id `1196590`, real saves at `.../userdata/11052978/1196590/remote/win64_save/`) and on the PS5 (title `PPSA01556`, slot 0 already has a container).
+
+Confirms the docs' predictions exactly: PC side decrypts with `KeyRE8` (previously untested) at the usual offset (`0x20`, `HasID=true`), PS5 side parses as plaintext at the unencrypted offset (`0xc`), both checksums valid against real saves. **Like RE7 and unlike RE2/RE3/RE4, it has no platform-identity field** - the same exhaustive search for the shared enum+bool hash pair (`0xb41fa365`/`0xe231b945`) found zero matches in either the real PC or real PS5 save, so `TitleConfig.PlatformClass` is left at zero here too.
+
+Both directions are now fully confirmed in-game. Real PC files live on the Steam Deck (a separate machine from where this tool runs), not locally - `--install`'s `--pc-dir` only writes to a local directory, so installing onto the Deck itself needed a manual `scp` step (backing up the Deck's live file first) after running `--install` against a local staging copy of the PC save directory. Worth automating if this remote-PC pattern comes up again.
+
+A field-by-field structural round-trip diff (source object tree vs. converted object tree, both directions, using the real PC and real PS5 saves) found zero semantic differences. Both directions also ran cleanly as a live dry run through the actual `save-sync` CLI against real Garlic. Given RE7's PC→PS5 crash turned out to be environmental rather than a real bug, this is now at the same confidence level RE7 was at just before its own live-applied test - worth trying for real the same way.
 
 ## Not yet implemented (no live test possible)
 
-- **Village (RE8)** - PS5 side confirmed to share RE3/RE7's unencrypted shape (title `PPSA01556`), but not installed anywhere this project has access to, so there's no `games/*.json` profile, no platform-class (or no-platform-class, per RE7's precedent) confirmation, and nothing to test yet.
 - **Requiem (RE9)** - genuinely encrypted with a different cipher ("Mandarin") this project hasn't implemented yet.
 
 ## Summary: what a live test session would need to cover
