@@ -22,21 +22,33 @@ func (w *rszWriter) alignUp(n int) {
 	}
 }
 
+// alignSized mirrors rszCursor.alignSized exactly - the reader's
+// bit-mask rule, not a true alignment. Reader and writer must agree here
+// or a re-emitted body desynchronises on the next parse.
+func (w *rszWriter) alignSized(size int) {
+	if size == 1 {
+		return
+	}
+	abs := w.base + len(w.buf)
+	masked := (abs + size - 1) &^ (size - 1)
+	for i := abs; i < masked; i++ {
+		w.buf = append(w.buf, 0)
+	}
+}
+
 func (w *rszWriter) u8(v uint8)   { w.buf = append(w.buf, v) }
 func (w *rszWriter) u16(v uint16) { w.buf = binary.LittleEndian.AppendUint16(w.buf, v) }
 func (w *rszWriter) u32(v uint32) { w.buf = binary.LittleEndian.AppendUint32(w.buf, v) }
 func (w *rszWriter) u64(v uint64) { w.buf = binary.LittleEndian.AppendUint64(w.buf, v) }
 
-// writeSizedValue mirrors readSizedValue: align to the value's own size,
-// then emit exactly ValueSize bytes.
+// writeSizedValue mirrors readSizedValue: advance by the size-derived
+// bit-mask rule, then emit exactly ValueSize bytes.
 func (w *rszWriter) writeSizedValue(v Value, declared int) error {
 	size := declared
 	if v.Type == FieldTypeStruct {
 		size = len(v.StructBytes)
 	}
-	if size != 1 {
-		w.alignUp(size)
-	}
+	w.alignSized(size)
 	switch v.Type {
 	case FieldTypeStruct:
 		w.buf = append(w.buf, v.StructBytes...)

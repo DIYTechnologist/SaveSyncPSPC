@@ -206,6 +206,28 @@ func (c *rszCursor) alignUp(n int) {
 	}
 }
 
+// alignSized advances to where a value of the given declared size
+// begins. RE Engine does not compute a true alignment here: it applies
+// the bit-mask `(pos + size - 1) &^ (size - 1)`, which is only equivalent
+// to aligning up when size is a power of two. Every size in RE2/RE3/RE4/
+// RE7/RE Village saves is a power of two (1/2/4/8/16), so the difference
+// never showed - but Resident Evil Requiem carries 24-byte struct values
+// (a 3-double position), where the mask clears bits 0/1/2/4 and lands
+// somewhere a real 24-byte alignment never would. Confirmed against a
+// real Requiem save: the mask predicts all 57 such values' positions
+// exactly, and the whole body then parses to completion, while true
+// alignment desynchronises at the first one.
+func (c *rszCursor) alignSized(size int) {
+	if size == 1 {
+		return
+	}
+	abs := c.base + c.pos
+	masked := (abs + size - 1) &^ (size - 1)
+	if masked > abs {
+		c.pos += masked - abs
+	}
+}
+
 func (c *rszCursor) u8() (uint8, error) {
 	b, err := c.take(1)
 	if err != nil {
@@ -346,12 +368,12 @@ func readValue(c *rszCursor, ft FieldType) (Value, error) {
 }
 
 // readSizedValue reads a fixed/sized value (matching
-// FieldValue::read_sized): a size!=1 first aligns the cursor up to a
-// `size`-byte boundary (not just 4 - e.g. an 8-byte S64 aligns to 8).
+// FieldValue::read_sized): a size!=1 first advances the cursor by the
+// size-derived bit-mask rule (see alignSized - for the power-of-two
+// sizes every other title uses, that is exactly "align up to a
+// `size`-byte boundary", e.g. an 8-byte S64 aligns to 8).
 func readSizedValue(c *rszCursor, ft FieldType, size uint32) (Value, error) {
-	if size != 1 {
-		c.alignUp(int(size))
-	}
+	c.alignSized(int(size))
 	valueOffset := c.pos
 	v, err := readSizedValueInner(c, ft, size)
 	if err != nil {

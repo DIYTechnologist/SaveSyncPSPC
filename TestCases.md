@@ -165,9 +165,57 @@ Both directions are now fully confirmed in-game. Real PC files live on the Steam
 
 A field-by-field structural round-trip diff (source object tree vs. converted object tree, both directions, using the real PC and real PS5 saves) found zero semantic differences. Both directions also ran cleanly as a live dry run through the actual `save-sync` CLI against real Garlic. Given RE7's PC→PS5 crash turned out to be environmental rather than a real bug, this is now at the same confidence level RE7 was at just before its own live-applied test - worth trying for real the same way.
 
-## Not yet implemented (no live test possible)
+## Resident Evil Requiem (`requiem`, engine `reengine`)
 
-- **Requiem (RE9)** - genuinely encrypted with a different cipher ("Mandarin") this project hasn't implemented yet.
+| Direction | Format-level | Live dry-run | Live applied + in-game |
+|---|---|---|---|
+| PC → PS5 | ✅ real Steam Deck save → output decodes under the PS5 key, valid hash, body byte-identical to source | ✅ real Garlic | ✅ **confirmed loading correctly in-game (2026-08-09), twice** - two different saves, each loading into the exact scene its file describes; the second was also slot-retargeted (slot 1 → slot 0 container) |
+| PS5 → PC | ✅ real PS5 save → output decodes under the Steam key, valid hash, body byte-identical to source, parses to 38 objects | ✅ real Garlic | ⬜ not yet tried |
+
+**New in this session (2026-08-09):** Requiem went from "parked, genuinely encrypted, cipher not implemented" to fully wired in one pass - `games/requiem.json`, the Mandarin cipher (`internal/reengine/mandarin.go` + `cityhash.go`), and the converter (`requiem.go`). Real saves: Steam Deck (app id `3764200`, 4 slots) and PS5 (title `PPSA31246`, slot 0).
+
+**Structurally the simplest conversion in the project, despite the most complex cipher.** Requiem is the first title whose two platforms share *both* a cipher (Mandarin, `flags=0x10`) and a container shape (body at `0x10`, no ID field on either side). They differ only in the account key, so a conversion is a pure key swap with the decrypted body carried across verbatim - no re-serialization, no re-alignment, and so **none of the alignment-padding fidelity loss every other title has** (confirmed: body byte-identical in both directions on real saves).
+
+**Both keys recovered, by different routes:**
+- **PC: the raw 64-bit SteamID64, unmasked** - unique in this project, where every other title uses the 32-bit account ID. The engine adapter reconstructs it from the bridge's normalized value, so `--steam-id` still accepts either form.
+- **PS5: a fixed hardcoded constant** (`394424879635983`), not account-bound at all - console saves are already bound to an account by the OS savedata container. Found by sweeping every 8-byte window of the real PS5 `eboot.bin` against a known-plaintext oracle (the first 64 bytes of each block's metadata are a key-independent constant, so PRNG mask bytes are recoverable without any key) - the same technique that found RE4's Blowfish key. One match out of ~550M candidates, in 7 seconds.
+
+Getting here also required fixing a **real RSZ reader/writer bug** that had been latent since the beginning (see `TODO.md`): sized values are positioned by the bit mask `(pos + size - 1) &^ (size - 1)`, not by aligning up to `size`. Those coincide for the power-of-two sizes every other title uses, but Requiem's 24-byte struct values (3-double positions) desynchronised the reader on the very first one. After the fix all five real Requiem saves parse to completion, and every real RE2/RE3/RE4/RE7/Village save still parses with unchanged results.
+
+### The account-identity field, found by a failed live test (2026-08-09)
+
+The first real PC→PS5 apply produced a save the PS5 **silently refused**: the main menu offered only "New Game", with no Load Game entry at all - even though the file read back byte-identical, decrypted under the PS5 key with a valid hash, and parsed to the same 38 objects a native save has. The console *did* have a working Load Game before the push, so this was a genuine regression from our file, not a pre-existing state.
+
+**Root cause: Requiem has an identity field, just not the one every other RE title uses.** There is no platform enum+bool pair (searching those hashes finds nothing, same as RE7 and Village). Instead the save's header class carries a **per-account 32-bit value** - class `0x92470294`, field `0xa4d68992` - that is identical across every save belonging to one account and differs between accounts (verified: all three real Steam Deck saves carry `0x6fc16e9c`; the PS5's carries `0x1cb70f8e`). Leaving the Steam account's value in place made the PS5 treat the save as another account's and omit it from the menu - **the same silent-omission symptom as RE3's wrong-Steam-ID bug**, and a reminder that this failure mode looks identical to "nothing happened".
+
+It **cannot be derived**: murmur3 (both seeds, 4- and 8-byte inputs), CityHash, and simple masking/xor of the Steam account ID, the SteamID64, the PSN account ID and the PS5 cipher key were all tested against both known values - no match. So the converter reads it from a save the *destination* already owns: the PS5 container's current payload (which the bridge already fetched as a template but this engine previously ignored - a standing TODO now closed), or, for PS5→PC, any existing save in the PC directory. Confirmed on real data: the converted output differs from its source body by **exactly 4 bytes**, now holding the console's own value.
+
+A **build-stamp field** sits in the same class (`0x781ee97a`): `0x1002000` on the PS5 and on the Deck's slots 1 and 10, but `0x1001002` on the Deck's slot 0 - the one file that maps to PS5 slot 0. It is deliberately *not* rewritten (it describes which build wrote the contents), but it's the next suspect if a converted save still won't load.
+
+**Also confirmed region-independent:** two different real PS5 `eboot.bin` builds (different sizes and hashes, one USA) each contain the PS5 Mandarin key exactly once plus identical seeds and SplitMix64 constants, the USA build simply shifted by `0x30`. No per-region key handling is needed.
+
+### Confirmed working in-game (2026-08-09), after one real bug and two false alarms
+
+**PC→PS5 loads correctly.** The converted save that was pushed (`data000.bin`) put the player at "Wrenwood / Main Street, Go after victor" - exactly the content of that file's in-game entry, and different from the console's own save. Identified by matching the game's save-select descriptions to file mtimes:
+
+| Game's UI position | Description | Timestamp | Label | File |
+|---|---|---|---|---|
+| 0 | Chronic Care Center / Room 203, escape | 04/29 00:44 | Auto 01 | `data001Slot.bin` |
+| 1 | Wrenwood / Main Street, Go after victor | 03/27 23:40 | Auto 02 | `data000.bin` |
+| 2 | Chronic Care Center / Room 201, Get the Fuse | 04/29 00:54 | 1 | `data010Slot.bin` |
+
+**Naming caveat, contrary to RE2's convention:** `dataNNNSlot.bin` does *not* mean "manual save" for Requiem. Its two **autosaves** are `data000.bin` and `data001Slot.bin`; the manual save is `data010Slot.bin`. Only the trailing slot *number* is reliable - don't infer save type from the `Slot` suffix.
+
+**The one real bug was the account-identity field** (see above). Two things that looked like bugs were not:
+
+- **The build stamp is a red herring.** `data000.bin` carries `0x1001002` while the PS5 build carries `0x1002000`, and it loaded fine anyway. Older-build saves are accepted. `RE9VersionField` is still deliberately left alone, but it is not a gate.
+- **The "game served its own backup" conclusion was wrong**, and worth recording as a lesson in how to be misled. It was inferred from the player reporting a different character than expected, cross-checked against the OS backup container's contents - but the character mapping itself was the thing in error. The decisive evidence was never the character; it was the *specific scene description*, which matched the pushed file exactly. **When verifying a converted save in-game, compare a distinguishing detail of the save's own content (scene, objective, timestamp), not a coarse attribute that several saves share.**
+
+Diagnostics that did hold up, and are reusable: the save's header class carries a save counter (`0x39a2d78e`), an internal timestamp (`0x0327223f`), the account id (`0xa4d68992`) and the build stamp (`0x781ee97a`), and the decrypted body's last 4 bytes are the slot number - together enough to identify exactly which save is sitting in a container without launching anything.
+
+**Slot retargeting confirmed in-game too** (2026-08-09): the PS5 had a container only for slot 0, so pushing the Deck's slot-1 save meant rewriting its embedded slot number from 1 to 0 to match its destination container, alongside the account id. **It loaded correctly**, putting the player at "Chronic Care Center / Room 203, escape" - exactly that file's in-game entry, and a different scene from the first confirmation, so the two tests corroborate each other on different saves. This is a genuine capability the project didn't have: a save can be moved between slots, not just between platforms. The trailing slot number is the only thing that needs rewriting; the game accepts the result with no other changes. Deliberately still not exposed in the CLI, where the "a save must land in its own slot" rule protects every other title (whose slot semantics have not been tested this way).
+
+**Still not confirmed:** PS5→PC in-game (format-level and dry-run clean, never installed on the Deck), and the PS5 cannot receive a save into a slot whose container doesn't exist yet - only the game can create one.
 
 ## Summary: what a live test session would need to cover
 
@@ -177,8 +225,10 @@ In rough order of how close each already is:
 2. ~~RE2 PS5→PC, live~~ - **done.** Confirmed loading correctly in-game on a real Steam Deck (2026-08-08).
 3. ~~RE4, both directions~~ - **done.** Both confirmed loading correctly in-game on a real Steam Deck/PS5 (2026-08-08); also resolves the platform-field mapping uncertainty (`0x100e60` mapping confirmed correct as-is).
 4. ~~RE7 PS5→PC~~ - **done.** Built from scratch this session (no prior wiring) and confirmed loading correctly in-game on a real Steam Deck (2026-08-08). Discovered RE7 has no platform-identity field at all, unlike RE2/RE3/RE4.
-5. **RE7 PC→PS5** - only remaining unconfirmed RE7 direction, same new code path.
-6. **Subnautica PS5→PC** - applied for real (2026-08-08) but the in-game result was inconclusive (see the Subnautica section above); worth another attempt with a freshly-made PS5 save before trusting this direction. Below Zero and Subnautica PC→PS5 are both still untested live.
-7. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.
-8. **BG3 diagnostic** (duplicate-folder test, no code/no upload) - not a "live test" of a conversion, but the next real step before BG3's PS5→PC bug can even be debugged further.
-9. **Clair re-confirmation** - lowest priority (presumed working, foundational), but worth doing once for a complete, fully-current record.
+5. ~~RE7 PC→PS5~~ - **done (2026-08-09).** First live attempt crashed, but re-pushing the identical bytes loaded correctly, proving the crash was environmental (jailbreak/console instability), not a format bug.
+6. ~~RE Village, both directions~~ - **done (2026-08-09).** Wired up from scratch and both confirmed loading correctly in-game.
+7. ~~Requiem PC→PS5~~ - **done (2026-08-09).** Cipher implemented from scratch, both account keys recovered, and confirmed loading correctly in-game. **Requiem PS5→PC** is still unconfirmed in-game (format-level and dry-run clean).
+8. **Subnautica PS5→PC** - applied for real (2026-08-08) but the in-game result was inconclusive (see the Subnautica section above); worth another attempt with a freshly-made PS5 save before trusting this direction. Below Zero and Subnautica PC→PS5 are both still untested live.
+9. **RE2 PC→PS5 via the actual CLI `--apply`** (not the manual recipe) - closes a real gap even though the underlying mechanism is already proven.
+10. **BG3 diagnostic** (duplicate-folder test, no code/no upload) - not a "live test" of a conversion, but the next real step before BG3's PS5→PC bug can even be debugged further.
+11. **Clair re-confirmation** - lowest priority (presumed working, foundational), but worth doing once for a complete, fully-current record.

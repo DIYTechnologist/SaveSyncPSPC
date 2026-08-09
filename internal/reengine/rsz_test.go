@@ -29,13 +29,30 @@ func (b *rszBuilder) alignTo(n int) {
 	}
 }
 
+// maskAlignTo pads by the size-derived bit-mask rule the format actually
+// uses for sized values (see rszCursor.alignSized) - identical to
+// alignTo for power-of-two sizes, deliberately different otherwise.
+// The target is computed once from the current position, exactly as the
+// reader does - the mask is not idempotent for non-power-of-two sizes
+// (mask(0x38) == 0x48 but mask(0x40) == 0x40 for size 24), so padding
+// until "already at a fixed point" would land somewhere else entirely.
+func (b *rszBuilder) maskAlignTo(size int) {
+	if size == 1 {
+		return
+	}
+	abs := b.base + b.buf.Len()
+	for target := (abs + size - 1) &^ (size - 1); b.base+b.buf.Len() < target; {
+		b.buf.WriteByte(0xCD)
+	}
+}
+
 // structField appends one Struct-typed field carrying data verbatim.
 func (b *rszBuilder) structField(hash uint32, data []byte) {
 	b.u32(hash)
 	b.u32(uint32(FieldTypeStruct))
 	b.alignTo(4)
 	b.u32(uint32(len(data)))
-	b.alignTo(len(data))
+	b.maskAlignTo(len(data))
 	b.buf.Write(data)
 }
 
@@ -188,5 +205,76 @@ func TestReadRSZObjectsBoundsPreallocationForWideElements(t *testing.T) {
 
 	if _, err := ReadRSZObjects(b.buf.Bytes(), 0); err == nil {
 		t.Fatal("expected an error: not enough bytes to back a 20000-element U64 array")
+	}
+}
+
+// TestSizedValueUsesBitMaskNotTrueAlignment is the regression test for the
+// second desynchronisation class found in this format: RE Engine does not
+// align a sized value up to a `size`-byte boundary, it applies the bit
+// mask (pos + size - 1) &^ (size - 1). Those agree for every power-of-two
+// size (all RE2/RE3/RE4/RE7/Village saves use 1/2/4/8/16, which is why
+// this never showed), but diverge for the 24-byte struct values Resident
+// Evil Requiem carries: at a body offset where true 24-alignment would
+// land at +12, the mask lands at +20. Confirmed against a real Requiem
+// save, where the mask predicts all 57 such values exactly and the whole
+// body then parses to completion.
+func TestSizedValueUsesBitMaskNotTrueAlignment(t *testing.T) {
+	const size = 24
+	// 0x14 is a base where the two rules disagree for size 24.
+	c := &rszCursor{data: make([]byte, 64), base: 0x14}
+	c.pos = 0
+	c.alignSized(size)
+	abs := c.base + c.pos
+	if want := (0x14 + size - 1) &^ (size - 1); abs != want {
+		t.Fatalf("alignSized landed at %#x, want %#x", abs, want)
+	}
+	if abs%size == 0 {
+		t.Fatalf("test base is not discriminating: mask result %#x happens to be %d-aligned", abs, size)
+	}
+
+	// And the reader must round-trip a real 24-byte struct through it.
+	payload := bytes.Repeat([]byte{0xAB}, size)
+	for _, base := range []int{0x10, 0x18, 0x20, 0xc} {
+		body := buildStructBody(base, payload)
+		objs, err := ReadRSZObjects(body, base)
+		if err != nil {
+			t.Fatalf("base %#x: %v", base, err)
+		}
+		if len(objs) != 1 {
+			t.Fatalf("base %#x: got %d objects", base, len(objs))
+		}
+		got := objs[0].Class.Fields[0].Value.StructBytes
+		if !bytes.Equal(got, payload) {
+			t.Fatalf("base %#x: struct payload = % x, want % x", base, got, payload)
+		}
+		// The writer must agree with the reader byte-for-byte, or a
+		// converted save desynchronises the moment the game reads it.
+		out, err := WriteRSZObjects(objs, base, nil)
+		if err != nil {
+			t.Fatalf("base %#x re-emit: %v", base, err)
+		}
+		// Compare layout, not padding contents: the writer zeroes
+		// alignment gaps where the builder wrote recognisable filler
+		// (a known, separate fidelity gap - see TestCases.md).
+		wantLen := len(body) - 4 // minus the trailing slack the builder adds
+		if len(out) != wantLen {
+			t.Fatalf("base %#x: re-emitted %d bytes, want %d - padding landed in a different place",
+				base, len(out), wantLen)
+		}
+		if got := out[len(out)-size:]; !bytes.Equal(got, payload) {
+			t.Fatalf("base %#x: payload not at the expected offset: % x", base, got)
+		}
+	}
+}
+
+// TestAlignSizedRejectsZeroSizeWithoutPanicking covers a malformed save
+// declaring size 0: the old true-alignment path divided by it and
+// panicked, taking down whatever was parsing.
+func TestAlignSizedRejectsZeroSizeWithoutPanicking(t *testing.T) {
+	c := &rszCursor{data: make([]byte, 16), base: 0x10}
+	c.pos = 3
+	c.alignSized(0) // must not panic
+	if c.pos != 3 {
+		t.Fatalf("size 0 moved the cursor to %d", c.pos)
 	}
 }

@@ -48,18 +48,55 @@ type ImageConfig struct {
 // (key, platform-identity class, PS5 container shape) in
 // internal/reengine. Adding a new title means adding a TitleConfig there
 // and a line here - no other code in this package is title-specific,
-// *except* "re4": its PS5 side is plain Blowfish like RE2 (so its entry
-// here is still used by Inspect/checkSlot for that side), but its Steam
-// side uses a completely different cipher (Lime, not Blowfish at all),
-// so ConvertToPS5/ConvertFromPS5 special-case cfg.Title == "re4" and
-// call re.ConvertRE4PCToPS5/ConvertRE4PS5ToPC directly instead of going
-// through TitleConfig's (Blowfish-only) methods.
+// with two exceptions, both because TitleConfig's methods are
+// Blowfish-only:
+//
+//   - "re4": its PS5 side is plain Blowfish like RE2 (so its entry here
+//     is still used by Inspect/checkSlot for that side), but its Steam
+//     side uses a completely different cipher (Lime), so
+//     ConvertToPS5/ConvertFromPS5 call re.ConvertRE4PCToPS5 /
+//     ConvertRE4PS5ToPC directly.
+//   - "requiem": *neither* side is Blowfish - both are Mandarin - so its
+//     entry here is a placeholder carrying no key, and every operation
+//     that would touch the cipher (Inspect, the slot check, both
+//     conversions) is routed to the Mandarin path instead.
 var titles = map[string]re.TitleConfig{
 	"re2":     re.RE2,
 	"re3":     re.RE3,
 	"re4":     {Key: re.KeyRE4, PlatformClass: re.RE4PlatformClass},
 	"re7":     re.RE7,
 	"village": re.Village,
+	"requiem": {}, // placeholder: Mandarin on both sides, see above
+}
+
+// steamID64Base is the fixed prefix of a SteamID64 for an individual
+// user account (universe 1, type 1, instance 1); the low 32 bits are the
+// account ID.
+const steamID64Base uint64 = 0x0110000100000000
+
+// mandarinKeyFor returns the Mandarin account key for one side of a
+// Requiem save: the PS5's fixed constant, or the player's own SteamID64
+// for the Steam side.
+//
+// Requiem is the one title here that needs the *64-bit* SteamID64 rather
+// than the 32-bit account ID every other title embeds, so it has to undo
+// the bridge's normalization (bridge.steamAccountID masks --steam-id to
+// 32 bits, because writing a SteamID64 into RE2/RE3's ID field silently
+// hides the save from the load list - see TestCases.md). The two forms
+// are losslessly interconvertible for an individual account, so
+// reconstructing here keeps --steam-id accepting either form without
+// changing what any other title receives.
+func mandarinKeyFor(side engine.Side, steamID uint64) (uint64, error) {
+	if side == engine.SidePS5 {
+		return re.KeyRE9PS5, nil
+	}
+	if steamID == 0 {
+		return 0, fmt.Errorf("Requiem's Steam saves are encrypted with the account's own id - pass --steam-id")
+	}
+	if steamID>>32 == 0 {
+		return steamID64Base | steamID, nil
+	}
+	return steamID, nil
 }
 
 // Config is the engine_config block for a "reengine" profile.
@@ -69,7 +106,7 @@ type Config struct {
 	// identifies the slot.
 	SaveNamePrefix string `json:"save_name_prefix"`
 	// Title selects this profile's format facts from titles above
-	// (currently "re2", "re3", "re4", "re7", or "village").
+	// (currently "re2", "re3", "re4", "re7", "village", or "requiem").
 	Title  string        `json:"title"`
 	Images []ImageConfig `json:"images"`
 }
@@ -243,6 +280,20 @@ func (Engine) Inspect(cfgAny any, logical string, payload []byte, side engine.Si
 		return engine.Verdict{Portable: true, Checks: []engine.CheckResult{check}}
 	}
 
+	// Requiem is Mandarin on both sides, so re.Decode never applies and a
+	// full decrypt would need an account key this method doesn't have.
+	// A structural header check is all that's possible here, same as
+	// RE4's Steam side above.
+	if cfg.Title == "requiem" {
+		check := engine.CheckResult{Logical: logical, Check: CheckMagic, Tier: engine.TierWrongFormat}
+		if err := re.MandarinHeaderValid(payload); err != nil {
+			check.Reason = err.Error()
+			return engine.Verdict{Tier: engine.TierWrongFormat, Checks: []engine.CheckResult{check}}
+		}
+		check.Passed = true
+		return engine.Verdict{Portable: true, Checks: []engine.CheckResult{check}}
+	}
+
 	title := titles[cfg.Title]
 	key := title.Key
 	if side == engine.SidePS5 && title.PS5Unencrypted {
@@ -331,7 +382,7 @@ func checkSlot(cfg Config, image gameapi.SaveImage, data, key []byte) error {
 	return nil
 }
 
-func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string, _ map[string][]byte, _ map[string]bool) (gameapi.ConversionResult, error) {
+func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string, ps5Templates map[string][]byte, _ map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if len(images) != 1 {
 		return gameapi.ConversionResult{}, fmt.Errorf("reengine handles exactly one save image, got %d", len(images))
@@ -351,6 +402,9 @@ func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string,
 
 	if cfg.Title == "re4" {
 		return convertRE4ToPS5(cfg, image, pcData)
+	}
+	if cfg.Title == "requiem" {
+		return convertRE9(cfg, image, pcData, engine.SidePC, ps5Templates[image.Logical], pcDir)
 	}
 
 	title := titles[cfg.Title]
@@ -373,7 +427,7 @@ func (Engine) ConvertToPS5(cfgAny any, images []gameapi.SaveImage, pcDir string,
 	}, nil
 }
 
-func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads map[string][]byte, _ string, _ map[string]bool) (gameapi.ConversionResult, error) {
+func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads map[string][]byte, pcDir string, _ map[string]bool) (gameapi.ConversionResult, error) {
 	cfg := cfgAny.(Config)
 	if len(images) != 1 {
 		return gameapi.ConversionResult{}, fmt.Errorf("reengine handles exactly one save image, got %d", len(images))
@@ -386,6 +440,9 @@ func (Engine) ConvertFromPS5(cfgAny any, images []gameapi.SaveImage, ps5Payloads
 
 	if cfg.Title == "re4" {
 		return convertRE4FromPS5(cfg, image, data)
+	}
+	if cfg.Title == "requiem" {
+		return convertRE9(cfg, image, data, engine.SidePS5, nil, pcDir)
 	}
 
 	// A PC save embeds the Steam account id, and the source (a PS5 save)
@@ -558,4 +615,149 @@ func (Engine) InstallOutputs(_ any, outputs map[string][]byte, pcDir string, bac
 		}
 	}
 	return nil
+}
+
+// convertRE9 handles Resident Evil Requiem in both directions. Requiem
+// is the only title here whose two platforms share a cipher (Mandarin)
+// and a container shape, differing solely in the account key: the PS5
+// uses a fixed constant, the Steam side the player's own SteamID64. That
+// makes a conversion a pure key swap with the body carried across
+// verbatim - no re-serialization, no re-alignment, and so no
+// alignment-padding loss - which is why one function covers both
+// directions where RE4 needs two.
+//
+// srcSide says which platform the input came from, and therefore which
+// key reads it; the other side's key writes the output.
+// re9AccountIDFromDir finds the destination Steam account's identity
+// value by reading it out of a save that account already owns. Every save
+// belonging to one account carries the same value, so any decodable file
+// in the directory will do - which matters because the specific file this
+// conversion is about to write may not exist yet on a first sync.
+func re9AccountIDFromDir(pcDir string, preferred string, steamKey uint64) (uint32, error) {
+	var names []string
+	if preferred != "" {
+		names = append(names, preferred)
+	}
+	entries, err := os.ReadDir(pcDir)
+	if err != nil {
+		return 0, fmt.Errorf("reading %s: %w", pcDir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".bin") && e.Name() != preferred {
+			names = append(names, e.Name())
+		}
+	}
+	for _, name := range names {
+		raw, err := os.ReadFile(filepath.Join(pcDir, name))
+		if err != nil {
+			continue
+		}
+		dec, err := re.MandarinDecode(raw, steamKey)
+		if err != nil {
+			continue
+		}
+		id, err := re.RE9AccountID(dec.Body)
+		if err != nil {
+			continue
+		}
+		return id, nil
+	}
+	return 0, fmt.Errorf("no existing Requiem save in %s could be read with this account's id, so the account-identity value the game expects can't be determined; make one save in-game on this PC first", pcDir)
+}
+
+func convertRE9(cfg Config, image gameapi.SaveImage, data []byte, srcSide engine.Side, ps5Template []byte, pcDir string) (gameapi.ConversionResult, error) {
+	srcKey, err := mandarinKeyFor(srcSide, image.SteamID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	dstSide := engine.SidePS5
+	if srcSide == engine.SidePS5 {
+		dstSide = engine.SidePC
+	}
+	if _, err := mandarinKeyFor(dstSide, image.SteamID); err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+
+	token, err := slotToken(cfg, image.SaveName)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	want, ok := expectedSlotID(token)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: slot %q isn't a recognised slot name", image.Logical, token)
+	}
+	dec, err := re.MandarinDecode(data, srcKey)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	got, ok := slotIDOf(dec.Body)
+	if !ok {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: save is too short to carry a slot number", image.Logical)
+	}
+	if got != want {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: source save is for slot %d but the target container is slot %d (%q); a save must be written to its own slot",
+			image.Logical, got, want, token)
+	}
+
+	steamKey, err := mandarinKeyFor(engine.SidePC, image.SteamID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+
+	if srcSide == engine.SidePC {
+		// The destination PS5's account-identity value can only come from a
+		// save that console already owns - the container's current payload,
+		// which the bridge already fetched as a template.
+		if len(ps5Template) == 0 {
+			return gameapi.ConversionResult{}, fmt.Errorf("%s: no existing PS5 save to read the console's account id from", image.Logical)
+		}
+		tdec, err := re.MandarinDecode(ps5Template, re.KeyRE9PS5)
+		if err != nil {
+			return gameapi.ConversionResult{}, fmt.Errorf("%s: reading the PS5's existing save: %w", image.Logical, err)
+		}
+		ps5AccountID, err := re.RE9AccountID(tdec.Body)
+		if err != nil {
+			return gameapi.ConversionResult{}, fmt.Errorf("%s: reading the PS5's account id: %w", image.Logical, err)
+		}
+		converted, err := re.ConvertRE9PCToPS5(data, steamKey, ps5AccountID)
+		if err != nil {
+			return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.PCFile, err)
+		}
+		return gameapi.ConversionResult{
+			Outputs: map[string][]byte{image.SaveName: converted},
+			Manifest: map[string]any{
+				"pc_file":  image.PCFile,
+				"ps5_save": image.SaveName,
+				"payload":  image.Payload,
+				"note":     "Requiem's two platforms share a container shape and cipher, so the decrypted body is carried across byte-for-byte and only the account key changes. The save-select entry still keeps the previous occupant's text until the game next saves to this slot.",
+			},
+			Warnings: []string{
+				"Requiem support is new and has not been confirmed in-game in either direction - back up first.",
+			},
+		}, nil
+	}
+
+	outName, err := fileForSlot(token)
+	if err != nil {
+		return gameapi.ConversionResult{}, err
+	}
+	pcAccountID, err := re9AccountIDFromDir(pcDir, outName, steamKey)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	converted, err := re.ConvertRE9PS5ToPC(data, steamKey, pcAccountID)
+	if err != nil {
+		return gameapi.ConversionResult{}, fmt.Errorf("%s: %w", image.Logical, err)
+	}
+	return gameapi.ConversionResult{
+		Outputs: map[string][]byte{outName: converted},
+		Manifest: map[string]any{
+			"ps5_save": image.SaveName,
+			"pc_file":  outName,
+			"note":     "The output is encrypted with the --steam-id account's own SteamID64. Unlike RE2/RE3 - where a wrong id silently hides the save from the load list - a wrong id here makes the save fail to decrypt outright.",
+		},
+		Warnings: []string{
+			"Requiem PS5->PC conversion has never been verified on a real PC install - back up the PC save directory first.",
+		},
+	}, nil
 }
