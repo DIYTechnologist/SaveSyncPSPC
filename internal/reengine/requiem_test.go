@@ -6,9 +6,9 @@ import (
 )
 
 const (
-	testSteamID64      = 76561197971318706
-	testPCAccountID    = 0x6fc16e9c
-	testPS5AccountID   = 0x1cb70f8e
+	testSteamID64    = 76561197971318706
+	testPCAccountID  = 0x6fc16e9c
+	testPS5AccountID = 0x1cb70f8e
 )
 
 // buildRE9Body makes a synthetic Requiem body carrying the header class
