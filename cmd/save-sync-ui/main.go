@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"os"
 
-	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/ui"
+
+	"savesync-engine/games"
 )
 
 var version = "dev"

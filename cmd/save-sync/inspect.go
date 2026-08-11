@@ -7,12 +7,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"savesyncpspc"
 	"savesyncpspc/internal/bridge"
-	"savesyncpspc/internal/engine"
-	"savesyncpspc/internal/engine/unreal"
-	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
-	"savesyncpspc/internal/gvas"
+
+	"savesync-engine/engine"
+	"savesync-engine/engine/unreal"
+	"savesync-engine/games"
+	"savesync-engine/gvas"
 )
 
 // runInspectCommand implements `save-sync inspect`. It never writes
@@ -73,7 +75,7 @@ func resolveEngineForInspect(gamesDir, gameKey, titleID string) (engine.Engine, 
 	if gameKey == "" && titleID == "" {
 		return unreal.New(), nil, nil
 	}
-	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil)
+	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncpspc.Builtin)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -86,7 +88,7 @@ func resolveEngineForInspect(gamesDir, gameKey, titleID string) (engine.Engine, 
 // corresponding PC file.
 func inspectGarlic(garlicURL string, timeout time.Duration, ps5UID, gamesDir, gameKey, titleID, pcDir string, allow []string, allowAll, record bool) error {
 	client := garlic.New(garlicURL, timeout)
-	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil)
+	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncpspc.Builtin)
 	if err != nil {
 		return err
 	}

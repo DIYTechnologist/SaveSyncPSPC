@@ -10,9 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"savesyncpspc/internal/engine/larian"
-	"savesyncpspc/internal/gameapi"
 	"savesyncpspc/internal/garlic"
+
+	"savesync-engine/engine/larian"
+	"savesync-engine/gameapi"
 )
 
 func TestBackupCurrentSavesCreatesPCAndPS5Layout(t *testing.T) {

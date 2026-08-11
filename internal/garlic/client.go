@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"savesyncpspc/internal/util"
+	"savesync-engine/util"
 )
 
 type Save map[string]any

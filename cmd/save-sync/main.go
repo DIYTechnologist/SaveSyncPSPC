@@ -9,7 +9,8 @@ import (
 	"time"
 
 	"savesyncpspc/internal/bridge"
-	"savesyncpspc/internal/games"
+
+	"savesync-engine/games"
 )
 
 var version = "dev"
