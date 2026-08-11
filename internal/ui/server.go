@@ -15,12 +15,14 @@ import (
 	"sync"
 	"time"
 
+	"savesyncpspc"
 	"savesyncpspc/internal/bridge"
-	"savesyncpspc/internal/games"
 	"savesyncpspc/internal/garlic"
-	"savesyncpspc/internal/ludusavi"
-	"savesyncpspc/internal/pcpath"
-	"savesyncpspc/internal/util"
+
+	"savesync-engine/games"
+	"savesync-engine/ludusavi"
+	"savesync-engine/pcpath"
+	"savesync-engine/util"
 )
 
 // runMu serializes /api/run's actual conversion work (bridge.PS5ToPC/
@@ -65,7 +67,7 @@ func (s Server) apiGames(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	profiles, err := games.Profiles(s.GamesDir)
+	profiles, err := games.Profiles(s.GamesDir, savesyncpspc.Builtin)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
@@ -110,7 +112,7 @@ func (s Server) apiSaves(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	profiles, _ := games.Profiles(s.GamesDir)
+	profiles, _ := games.Profiles(s.GamesDir, savesyncpspc.Builtin)
 	byID := map[string]string{}
 	for _, profile := range profiles {
 		for _, id := range profile.TitleIDs {
@@ -230,7 +232,7 @@ func (s Server) apiPCSaveSuggestions(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "game is required"})
 		return
 	}
-	profiles, err := games.Profiles(s.GamesDir)
+	profiles, err := games.Profiles(s.GamesDir, savesyncpspc.Builtin)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
 		return
