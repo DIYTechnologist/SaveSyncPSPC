@@ -11,10 +11,10 @@ import (
 	"savesyncpspc/internal/bridge"
 	"savesyncpspc/internal/garlic"
 
-	"savesync-engine/engine"
-	"savesync-engine/engine/unreal"
-	"savesync-engine/games"
-	"savesync-engine/gvas"
+	"github.com/DIYTechnologist/savesync-engine/engine"
+	"github.com/DIYTechnologist/savesync-engine/engine/unreal"
+	"github.com/DIYTechnologist/savesync-engine/games"
+	"github.com/DIYTechnologist/savesync-engine/gvas"
 )
 
 // runInspectCommand implements `save-sync inspect`. It never writes

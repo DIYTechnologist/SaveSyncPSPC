@@ -10,7 +10,7 @@ import (
 
 	"savesyncpspc/internal/bridge"
 
-	"savesync-engine/games"
+	"github.com/DIYTechnologist/savesync-engine/games"
 )
 
 var version = "dev"

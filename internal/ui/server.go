@@ -19,10 +19,10 @@ import (
 	"savesyncpspc/internal/bridge"
 	"savesyncpspc/internal/garlic"
 
-	"savesync-engine/games"
-	"savesync-engine/ludusavi"
-	"savesync-engine/pcpath"
-	"savesync-engine/util"
+	"github.com/DIYTechnologist/savesync-engine/games"
+	"github.com/DIYTechnologist/savesync-engine/ludusavi"
+	"github.com/DIYTechnologist/savesync-engine/pcpath"
+	"github.com/DIYTechnologist/savesync-engine/util"
 )
 
 // runMu serializes /api/run's actual conversion work (bridge.PS5ToPC/

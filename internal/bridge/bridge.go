@@ -12,10 +12,10 @@ import (
 	"savesyncpspc"
 	"savesyncpspc/internal/garlic"
 
-	"savesync-engine/engine"
-	"savesync-engine/gameapi"
-	"savesync-engine/games"
-	"savesync-engine/util"
+	"github.com/DIYTechnologist/savesync-engine/engine"
+	"github.com/DIYTechnologist/savesync-engine/gameapi"
+	"github.com/DIYTechnologist/savesync-engine/games"
+	"github.com/DIYTechnologist/savesync-engine/util"
 )
 
 const ToolVersion = "0.2.0"

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"savesync-engine/util"
+	"github.com/DIYTechnologist/savesync-engine/util"
 )
 
 type Save map[string]any

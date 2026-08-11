@@ -1,3 +1,5 @@
+github.com/DIYTechnologist/savesync-engine v0.0.1786465290 h1:dFBoH5Bzylc4FPg1EbnNb/GwCh9Zffw88hvt8dTkSD8=
+github.com/DIYTechnologist/savesync-engine v0.0.1786465290/go.mod h1:uHIAwkszUqacUns1O7Ov7tHDVNU9GQtxaMjtGK8wTW0=
 golang.org/x/crypto v0.31.0 h1:ihbySMvVjLAeSH1IbfcRTkD/iNscyz8rGzjF/E5hV6U=
 golang.org/x/crypto v0.31.0/go.mod h1:kDsLvtWBEx7MV9tJOj9bnXsPbxwJQ6csT/x4KIN4Ssk=
 golang.org/x/sys v0.28.0 h1:Fksou7UEQUWlKvIdsqzJmUmCX3cZuD2+P3XyyzwMhlA=

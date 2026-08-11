@@ -12,8 +12,8 @@ import (
 
 	"savesyncpspc/internal/garlic"
 
-	"savesync-engine/engine/larian"
-	"savesync-engine/gameapi"
+	"github.com/DIYTechnologist/savesync-engine/engine/larian"
+	"github.com/DIYTechnologist/savesync-engine/gameapi"
 )
 
 func TestBackupCurrentSavesCreatesPCAndPS5Layout(t *testing.T) {
