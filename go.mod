@@ -2,7 +2,7 @@ module savesyncpspc
 
 go 1.26.5
 
-require github.com/DIYTechnologist/savesync-engine v0.0.1786465290
+require github.com/DIYTechnologist/savesync-engine v0.0.1786468785
 
 require (
 	golang.org/x/crypto v0.31.0 // indirect

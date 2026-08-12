@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"savesyncpspc"
 	"savesyncpspc/internal/bridge"
 	"savesyncpspc/internal/garlic"
 
+	savesyncengine "github.com/DIYTechnologist/savesync-engine"
 	"github.com/DIYTechnologist/savesync-engine/engine"
 	"github.com/DIYTechnologist/savesync-engine/engine/unreal"
 	"github.com/DIYTechnologist/savesync-engine/games"
@@ -75,7 +75,7 @@ func resolveEngineForInspect(gamesDir, gameKey, titleID string) (engine.Engine, 
 	if gameKey == "" && titleID == "" {
 		return unreal.New(), nil, nil
 	}
-	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncpspc.Builtin)
+	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncengine.Builtin)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -88,7 +88,7 @@ func resolveEngineForInspect(gamesDir, gameKey, titleID string) (engine.Engine, 
 // corresponding PC file.
 func inspectGarlic(garlicURL string, timeout time.Duration, ps5UID, gamesDir, gameKey, titleID, pcDir string, allow []string, allowAll, record bool) error {
 	client := garlic.New(garlicURL, timeout)
-	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncpspc.Builtin)
+	selected, err := games.SelectProfile(gamesDir, gameKey, titleID, nil, savesyncengine.Builtin)
 	if err != nil {
 		return err
 	}

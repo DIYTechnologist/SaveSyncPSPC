@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"savesyncpspc"
 	"savesyncpspc/internal/garlic"
 
+	savesyncengine "github.com/DIYTechnologist/savesync-engine"
 	"github.com/DIYTechnologist/savesync-engine/engine"
 	"github.com/DIYTechnologist/savesync-engine/gameapi"
 	"github.com/DIYTechnologist/savesync-engine/games"
@@ -523,7 +523,7 @@ func selectGame(options Options, client *garlic.Client) (games.Selected, error) 
 			seen = append(seen, fmt.Sprint(save["title_id"]))
 		}
 	}
-	return games.SelectProfile(options.GamesDir, options.Game, options.TitleID, seen, savesyncpspc.Builtin)
+	return games.SelectProfile(options.GamesDir, options.Game, options.TitleID, seen, savesyncengine.Builtin)
 }
 
 func printWarnings(log func(string), warnings []string) {
@@ -545,7 +545,7 @@ func writeJSON(path string, value any) error {
 }
 
 func SupportedGroups(gamesDir string, saves []garlic.Save) ([]map[string]any, error) {
-	profiles, err := games.Profiles(gamesDir, savesyncpspc.Builtin)
+	profiles, err := games.Profiles(gamesDir, savesyncengine.Builtin)
 	if err != nil {
 		return nil, err
 	}
