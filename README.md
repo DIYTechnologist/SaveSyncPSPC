@@ -12,7 +12,7 @@ The service discovers supported saves from Garlic, groups the save images that b
 
 ## Current Support
 
-See [docs/supported_games.md](docs/supported_games.md) for supported games and platform compatibility.
+See [savesync-engine's `docs/supported_games.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/supported_games.md) for supported games and platform compatibility (title IDs, engine, and container/cipher facts live in the engine library now, since `savesyncpspc` is just the CLI/UI on top of it).
 See [docs/games/clair.md](docs/games/clair.md) for Clair-specific save names, compatibility notes, and workflow details.
 See [docs/dev.md](docs/dev.md) for development, release, and new-game implementation notes.
 
@@ -109,7 +109,7 @@ Before any of that, a portability gate checks every save image for things that w
   --record
 ```
 
-If a check blocks a run you believe is actually fine, bypass just that check with `--allow <check>` (see `docs/dev.md`'s "Portability Gate" section for the full list of checks and the override rules).
+If a check blocks a run you believe is actually fine, bypass just that check with `--allow <check>` (see [savesync-engine's `docs/dev.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/dev.md)'s "Portability Gate" section for the full list of checks and the override rules).
 
 Pull PS5 payloads from Garlic and create PC save files:
 
@@ -204,9 +204,9 @@ Like BG3, RE2 save slots aren't fixed — pass `--ps5-save-name` naming the Garl
   --force
 ```
 
-PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-tested but not yet confirmed in-game. The global profile/settings slot (`data00-1.bin`) is refused outright — converting it crashed the game at startup. See `docs/ressave.md` for the full format writeup.
+PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-tested but not yet confirmed in-game. The global profile/settings slot (`data00-1.bin`) is refused outright — converting it crashed the game at startup. See [savesync-engine's `docs/ressave.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/ressave.md) for the full format writeup.
 
-`--game re3` (title `PPSA03952`) works the same way, unlike RE2 in one respect worth knowing: RE3's PS5 save is completely unencrypted rather than an encrypted-no-account-ID container. Confirmed against real saves and via a live dry run in both directions; not yet confirmed loading a converted save in-game. See `TODO.md`'s "RE Engine family" section for the full breakdown of which other RE Engine titles convert and which don't yet.
+`--game re3` (title `PPSA03952`) works the same way, unlike RE2 in one respect worth knowing: RE3's PS5 save is completely unencrypted rather than an encrypted-no-account-ID container. Confirmed against real saves and via a live dry run in both directions; not yet confirmed loading a converted save in-game. See [savesync-engine's `TODO.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/TODO.md)'s "RE Engine family" section for the full breakdown of which other RE Engine titles convert and which don't yet.
 
 `--game re4` (title `PPSA07411`) needs one more flag: `--steam-id <SteamID64>`. RE4's Steam save has no fixed key at all - it uses a different cipher ("Lime") keyed off the account itself:
 
@@ -225,7 +225,7 @@ PC → PS5 is confirmed working in-game. PS5 → PC is implemented and unit-test
   --force
 ```
 
-Fully validated at the format level (real saves, both directions), not yet confirmed loading a converted save in-game. See `docs/dev-res4.md` for how the Lime cipher works.
+Fully validated at the format level (real saves, both directions), not yet confirmed loading a converted save in-game. See [savesync-engine's `docs/dev-res4.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/dev-res4.md) for how the Lime cipher works.
 
 ### Subnautica (fixed save slot)
 
@@ -242,7 +242,7 @@ Subnautica's PC save lives inside the game's own install directory rather than u
   --force
 ```
 
-No encryption, no proprietary class/versioning system — the simplest format this tool handles. `subnautica_below_zero` uses the same engine and works the same way, except its PC/PS5 slot-number pairing is hardcoded per-profile rather than matching by number (see `docs/subnautica.md`). Not yet tested: loading a converted save in-game for either title.
+No encryption, no proprietary class/versioning system — the simplest format this tool handles. `subnautica_below_zero` uses the same engine and works the same way, except its PC/PS5 slot-number pairing is hardcoded per-profile rather than matching by number (see [savesync-engine's `docs/subnautica.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/subnautica.md)). Not yet tested: loading a converted save in-game for either title.
 
 ## Docker
 
@@ -313,7 +313,7 @@ save-sync-ps-pc-checksums.txt
 
 ## Game Discovery
 
-Supported games are described entirely by metadata under `games/` — a game is a JSON profile naming a save-format *engine* (`internal/engine/unreal` for Unreal's GVAS format; `internal/engine/larian` for Baldur's Gate 3's LSPK format; `internal/engine/reengine` for Capcom RE Engine's DSSS format; `internal/engine/unityblb` for Subnautica's gzip+TLV container) plus that engine's config, not a per-game Go plugin. Every engine supports full read/convert/write conversion. Unlike Unreal titles, BG3 and RE Engine titles have no fixed, config-known save filenames (slot, `.lsv`/`.bin` name), so their profiles mark images as dynamic and conversion runs need `--ps5-save-name` to say which Garlic save slot to target — see "Dynamic image resolution" in `docs/dev.md`. The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
+Supported games are described entirely by metadata under `games/` (embedded in [`savesync-engine`](https://github.com/DIYTechnologist/savesync-engine)) — a game is a JSON profile naming a save-format *engine* (`engine/unreal` for Unreal's GVAS format; `engine/larian` for Baldur's Gate 3's LSPK format; `engine/reengine` for Capcom RE Engine's DSSS format; `engine/unityblb` for Subnautica's gzip+TLV container) plus that engine's config, not a per-game Go plugin. Every engine supports full read/convert/write conversion. Unlike Unreal titles, BG3 and RE Engine titles have no fixed, config-known save filenames (slot, `.lsv`/`.bin` name), so their profiles mark images as dynamic and conversion runs need `--ps5-save-name` to say which Garlic save slot to target — see "Dynamic image resolution" in [savesync-engine's `docs/dev.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/dev.md). The `games/` metadata is embedded into both binaries at build time, so `save-sync`/`save-sync-ui` work standalone from any directory. `--games-dir` (default `games`, resolved against the current directory) points at a directory of `*.json` files that override or add to the embedded defaults by game key; the first time that directory doesn't exist, it's created and seeded with a copy of the embedded metadata so you get an editable on-disk copy without a source checkout.
 
 The metadata maps one or more PS5 title IDs to a stable game key, and declares its engine:
 
@@ -342,7 +342,7 @@ The metadata maps one or more PS5 title IDs to a stable game key, and declares i
 
 `class_equivalence` rows match by class-name suffix, not full path — real Unreal Blueprint SaveGame classes are full content paths (e.g. `/Game/Gameplay/Save/SaveObjects/BP_SaveGameObject_V7.BP_SaveGameObject_V7_C`), and the content-folder prefix isn't a reliable signal, so only the part after the last `.` is configured and checked. `module` only applies to native (`/Script/...`) classes; leave it empty for Blueprint-based games like Clair.
 
-A new game on an already-supported engine (another Unreal title, for instance) is just a new `games/<key>.json` — no Go code required. See "Engine Abstraction" in `docs/dev.md` for the full schema and how to add a genuinely new engine.
+A new game on an already-supported engine (another Unreal title, for instance) is just a new `games/<key>.json` — no Go code required. See "Engine Abstraction" in `docs/dev.md`, and [savesync-engine's `docs/dev.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/dev.md) for the full schema and how to add a genuinely new engine.
 
 ## Development
 

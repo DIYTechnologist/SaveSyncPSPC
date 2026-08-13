@@ -10,7 +10,7 @@ This page covers the Clair-specific behavior in the Save Sync PS-PC bridge.
 - Region: EU
 - PC platform: Steam
 
-The title ID and conversion behavior are both declared in `games/clair.json` (`"engine": "unreal"` plus its `engine_config`); there's no per-game Go package. See "Engine Abstraction" in `docs/dev.md` for how the generic `internal/engine/unreal` engine reads that profile.
+The title ID and conversion behavior are both declared in `games/clair.json` (`"engine": "unreal"` plus its `engine_config`); there's no per-game Go package. See "Engine Abstraction" in `docs/dev.md`, and [savesync-engine's `docs/dev.md`](https://github.com/DIYTechnologist/savesync-engine/blob/main/docs/dev.md) for how the generic `engine/unreal` engine reads that profile.
 
 ## Save Images
 
