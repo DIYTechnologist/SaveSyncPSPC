@@ -339,3 +339,13 @@ func TestResolveDynamicImagesNormalizesSteamID(t *testing.T) {
 		t.Fatalf("SteamID = %d, want it normalized to the 32-bit account id 11052978", resolved[0].SteamID)
 	}
 }
+
+func TestOutputTarget(t *testing.T) {
+	payloads := map[string]string{"sdimg_EXPEDITION0": "ue4savegame.dpx.sav"}
+	if s, p := outputTarget("sdimg_EXPEDITION0", payloads); s != "sdimg_EXPEDITION0" || p != "ue4savegame.dpx.sav" {
+		t.Fatalf("plain key: got %q/%q", s, p)
+	}
+	if s, p := outputTarget("sdimg_KntSlotSaveFile-0/data.save", payloads); s != "sdimg_KntSlotSaveFile-0" || p != "data.save" {
+		t.Fatalf("SaveName/Payload key: got %q/%q", s, p)
+	}
+}

@@ -470,8 +470,9 @@ func PCToPS5(options Options) error {
 	}
 	warnUnusedOverrides(log, options.Allow, result.OverriddenChecks)
 	printWarnings(log, result.Warnings)
-	for saveName, data := range result.Outputs {
-		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadBySaveName[saveName]), data); err != nil {
+	for key, data := range result.Outputs {
+		saveName, payloadName := outputTarget(key, payloadBySaveName)
+		if err := AtomicWrite(filepath.Join(options.OutputDir, saveName, payloadName), data); err != nil {
 			return err
 		}
 	}
@@ -498,8 +499,8 @@ func PCToPS5(options Options) error {
 		if !options.Yes {
 			return fmt.Errorf("refusing to write to PS5 without --yes")
 		}
-		for saveName, data := range result.Outputs {
-			payloadName := payloadBySaveName[saveName]
+		for key, data := range result.Outputs {
+			saveName, payloadName := outputTarget(key, payloadBySaveName)
 			log(fmt.Sprintf("Replacing %s %s/%s through Garlic...", profile.Name, saveName, payloadName))
 			if err := client.ReplacePayload(profile.TitleIDs, saveName, payloadName, data, options.PS5UID); err != nil {
 				return err
@@ -510,6 +511,17 @@ func PCToPS5(options Options) error {
 		log("Dry run only. Re-run with --apply --yes to replace PS5 payloads.")
 	}
 	return nil
+}
+
+// outputTarget maps a ConvertToPS5 output key to the Garlic save image and
+// payload it replaces. Most engines key outputs by SaveName alone (one
+// payload per image); an engine whose images hold several payloads (e.g.
+// glacier's index.save + data.save) keys them "<SaveName>/<Payload>".
+func outputTarget(key string, payloadBySaveName map[string]string) (saveName, payloadName string) {
+	if saveName, payloadName, ok := strings.Cut(key, "/"); ok {
+		return saveName, payloadName
+	}
+	return key, payloadBySaveName[key]
 }
 
 func selectGame(options Options, client *garlic.Client) (games.Selected, error) {
